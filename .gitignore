@@ -1,9 +1,8 @@
-app/.externalNativeBuild
-app/build
-app/*.iml
-.google
-.gradle
-.idea
-*.iml
+.gradle/
+build/
+.cache/
+.kotlin/
+.DS_Store
+
+.cxx/
 local.properties
-libretrodroid/.cxx

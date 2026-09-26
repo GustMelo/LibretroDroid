@@ -1,0 +1,39 @@
+name: Check upstream
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: multiplatform
+          fetch-depth: 0
+      - name: Merge new upstream commits into a review branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/Swordfish90/LibretroDroid.git
+          git fetch upstream master
+          if git merge-base --is-ancestor upstream/master HEAD; then exit 0; fi
+          sha=$(git rev-parse --short upstream/master)
+          branch="updates/upstream-$sha"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          if ! git merge --no-ff upstream/master -m "Merge upstream $sha"; then
+            git diff --name-only --diff-filter=U
+            echo '::error::Upstream conflicts require resolution; no release was changed.'
+            exit 1
+          fi
+          git push origin "$branch"
+          echo 'Review the upstream changes and run Validate library on this branch before merging. Artifacts and consumer lock files are not updated automatically.' > "$RUNNER_TEMP/body.md"
+          gh pr create --base multiplatform --head "$branch" --title "Update upstream to $sha" --body-file "$RUNNER_TEMP/body.md"

@@ -1,0 +1,156 @@
+diff --git a/libpcsxcore/cdrom.c b/libpcsxcore/cdrom.c
+index 11c435f..d7162e1 100644
+--- a/libpcsxcore/cdrom.c
++++ b/libpcsxcore/cdrom.c
+@@ -1777,7 +1777,10 @@ int cdrFreeze(void *f, int Mode) {
+ 		getCdInfo();
+ 
+ 		cdr.FifoOffset = tmp < DATA_SIZE ? tmp : DATA_SIZE;
+-		cdr.FifoSize = (cdr.Mode & MODE_SIZE_2340) ? 2340 : 2048 + 12;
++		// LibretroDroid: keep the saved fifo size (the mode may have changed after the sector was read);
++		// loads must reproduce the live run exactly for netplay rollback
++		if (cdr.FifoSize > DATA_SIZE)
++			cdr.FifoSize = (cdr.Mode & MODE_SIZE_2340) ? 2340 : 2048 + 12;
+ 		if (cdr.SubqForwardSectors > SUBQ_FORWARD_SECTORS)
+ 			cdr.SubqForwardSectors = SUBQ_FORWARD_SECTORS;
+ 
+@@ -1789,8 +1792,11 @@ int cdrFreeze(void *f, int Mode) {
+ 			tmpp[2] = btoi(tmpp[2]);
+ 		}
+ 		cdr.Prev[0] = 0xff;
+-		if (tmpp[0] != 0xff)
++		if (tmpp[0] != 0xff) {
+ 			ReadTrack(tmpp);
++			// LibretroDroid: live ReadTrack treats Prev as cached even if that read had failed
++			memcpy(cdr.Prev, tmpp, sizeof(tmpp));
++		}
+ 
+ 		if (cdr.Play) {
+ 			if (cdr.freeze_ver < 0x63647202)
+diff --git a/libpcsxcore/mdec.c b/libpcsxcore/mdec.c
+index 18b8566..b768224 100644
+--- a/libpcsxcore/mdec.c
++++ b/libpcsxcore/mdec.c
+@@ -711,10 +711,11 @@ int mdecFreeze(void *f, int Mode) {
+ 	gzfreeze(&mdec.reg0, sizeof(mdec.reg0));
+ 	gzfreeze(&mdec.reg1, sizeof(mdec.reg1));
+ 
+-	v = (u8 *)mdec.rl - base;
++	// LibretroDroid: save the same masked offsets a load produces
++	v = ((u8 *)mdec.rl - base) & 0x1ffffe;
+ 	gzfreeze(&v, sizeof(v));
+ 	mdec.rl = (u16 *)(base + (v & 0x1ffffe));
+-	v = (u8 *)mdec.rl_end - base;
++	v = ((u8 *)mdec.rl_end - base) & 0x1ffffe;
+ 	gzfreeze(&v, sizeof(v));
+ 	mdec.rl_end = (u16 *)(base + (v & 0x1ffffe));
+ 
+@@ -724,7 +725,7 @@ int mdecFreeze(void *f, int Mode) {
+ 	gzfreeze(&v, sizeof(v));
+ 	mdec.block_buffer_pos = 0;
+ 	if (v && v < sizeof(mdec.block_buffer))
+-		mdec.block_buffer_pos = mdec.block_buffer;
++		mdec.block_buffer_pos = mdec.block_buffer + v; // LibretroDroid: was reset to the start, losing the position
+ 
+ 	gzfreeze(&mdec.block_buffer, sizeof(mdec.block_buffer));
+ 	gzfreeze(&mdec.pending_dma1, sizeof(mdec.pending_dma1));
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index ea102b3..8ef10b4 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -797,6 +797,9 @@ int SaveState(const char *file) {
+ 	misc->CdromFrontendId = CdromFrontendId;
+ 	misc->save_counter = ++save_counter;
+ 	memset(misc->reserved, 0, sizeof(misc->reserved));
++	/* LibretroDroid: the interpreter's fractional cycle (cycle_multiplier 175 = 1.75/op) must survive
++	 * save/load, or every netplay rollback drops up to 0.75 cycle and peers drift apart. */
++	misc->reserved[0] = psxRegs.subCycle;
+ 
+ 	psxCpu->Notify(R3000ACPU_NOTIFY_BEFORE_SAVE, NULL);
+ 
+@@ -864,6 +867,8 @@ int LoadState(const char *file) {
+ 	struct misc_save_data *misc = (void *)(psxRegs.ptrs.psxH + 0xf000);
+ 	u32 biosBranchCheckOld = psxRegs.biosBranchCheck;
+ 	u32 oldCP0sr = psxRegs.CP0.n.SR;
++	u32 subCycle = 0;
++	u32 gpuSr = 0, haveMisc = 0;
+ 	union {
+ 		// save stack space
+ 		GPUFreeze_t gpu_hdr;
+@@ -938,6 +943,9 @@ int LoadState(const char *file) {
+ 		CdromFrontendId = misc->CdromFrontendId;
+ 		if (misc->save_counter)
+ 			save_counter = misc->save_counter;
++		subCycle = misc->reserved[0] & 0xffff;
++		gpuSr = misc->gpuSr;
++		haveMisc = 1;
+ 	}
+ 
+ 	if (Config.HLE)
+@@ -949,6 +957,10 @@ int LoadState(const char *file) {
+ 	assert(vram);
+ 	SaveFuncs.read(f, vram, 1024*512*2);
+ 	gpuSyncPluginSR();
++	/* LibretroDroid: HW_GPU_STATUS is a lazily synced copy that DMA timing reads directly;
++	 * keep the saved (possibly stale) value so a load behaves exactly like the live run. */
++	if (haveMisc)
++		HW_GPU_STATUS = gpuSr;
+ 
+ 	// spu
+ 	SaveFuncs.read(f, &Size, 4);
+@@ -989,6 +1001,7 @@ int LoadState(const char *file) {
+ 		psxMemOnIsolate((psxRegs.CP0.n.SR >> 16) & 1);
+ 
+ 	psxCpu->Notify(R3000ACPU_NOTIFY_AFTER_LOAD_STATE, NULL);
++	psxRegs.subCycle = subCycle;
+ 
+ 	result = 0;
+ cleanup:
+diff --git a/libpcsxcore/psxcounters.c b/libpcsxcore/psxcounters.c
+index 471980e..a88f745 100644
+--- a/libpcsxcore/psxcounters.c
++++ b/libpcsxcore/psxcounters.c
+@@ -603,9 +603,9 @@ s32 psxRcntFreeze( void *f, s32 Mode )
+         for( i = 0; i < CounterQuantity - 1; ++i )
+         {
+             _psxRcntWmode( i, rcnts[i].mode );
+-            count = (psxRegs.cycle - rcnts[i].cycleStart) / rcnts[i].rate;
+-            if (count > 0x1000)
+-                _psxRcntWcount( i, count & 0xffff );
++            // LibretroDroid: no "count > 0x1000" renormalization here; it rewrote cycleStart/cycle/
++            // counterState, so a load diverged from the live run (netplay rollback)
++            (void)count;
+         }
+         scheduleRcntBase();
+         psxRcntSet();
+diff --git a/plugins/gpulib/gpu.c b/plugins/gpulib/gpu.c
+index f04e3a5..da15211 100644
+--- a/plugins/gpulib/gpu.c
++++ b/plugins/gpulib/gpu.c
+@@ -1094,16 +1094,24 @@ long GPUfreeze(uint32_t type, GPUFreeze_t *freeze, uint16_t **vram_ptr)
+       sync_renderer(&gpu);
+       memcpy(freeze->ulControl, gpu.regs, sizeof(gpu.regs));
+       memcpy(freeze->ulControl + 0xe0, gpu.ex_regs, sizeof(gpu.ex_regs));
++      // LibretroDroid: keep the GPUREAD latch, loads must reproduce the live GPU exactly (netplay rollback)
++      freeze->ulControl[0xf0] = gpu.gp0;
+       freeze->ulStatus = gpu.status;
+       break;
+     case 0: // load
+       sync_renderer(&gpu);
+-      //memcpy(gpu.regs, freeze->ulControl, sizeof(gpu.regs));
++      // LibretroDroid: registers still zero from a GP1 reset were replayed as "command i, parameter 0",
++      // which the live GPU never ran, and regs[] kept values the dedupe below compares against.
++      // Start from reset defaults, replay only written registers, then restore regs[] verbatim.
++      do_reset(&gpu);
+       memcpy(gpu.ex_regs, freeze->ulControl + 0xe0, sizeof(gpu.ex_regs));
+       gpu.status = freeze->ulStatus;
+       gpu.cmd_len = 0;
+       for (i = 8; i > 1; i--)
+-        GPUwriteStatus((i << 24) | freeze->ulControl[i]);
++        if (freeze->ulControl[i])
++          GPUwriteStatus((i << 24) | freeze->ulControl[i]);
++      memcpy(gpu.regs, freeze->ulControl, sizeof(gpu.regs));
++      gpu.gp0 = freeze->ulControl[0xf0];
+       renderer_sync_ecmds(gpu.ex_regs);
+       renderer_update_caches(0, 0, 1024, 512, 0);
+       gpu_async_sync_ecmds(&gpu);

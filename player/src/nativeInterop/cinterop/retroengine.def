@@ -1,0 +1,3 @@
+headers = retroengine.h
+package = com.libretrodroid.engine.native
+staticLibraries = libretroengine.a

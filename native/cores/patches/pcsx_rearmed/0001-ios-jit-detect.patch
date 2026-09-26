@@ -1,0 +1,45 @@
+diff --git a/frontend/libretro.c b/frontend/libretro.c
+index 0fe66f9..2b52785 100644
+--- a/frontend/libretro.c
++++ b/frontend/libretro.c
+@@ -7,6 +7,18 @@
+ 
+ #define _GNU_SOURCE 1 // strcasestr
+ #include <stdio.h>
++#if defined(IOS) && !defined(DRC_DISABLE)
++/* LibretroDroid: no iOS o dynarec só roda com JIT liberado (processo com depurador: Xcode,
++ * StikDebug). Sem JIT, mmap executável derruba o app: fica no interpretador, como no 3DS. */
++#include <unistd.h>
++int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
++static int ios_jit_available(void)
++{
++   int flags = 0;
++   return csops(getpid(), 0 /* CS_OPS_STATUS */, &flags, sizeof(flags)) == 0
++      && (flags & 0x10000000 /* CS_DEBUGGED */) != 0;
++}
++#endif
+ #include <stdlib.h>
+ #include <stdarg.h>
+ #include <stdint.h>
+@@ -2540,6 +2552,10 @@ static void update_variables(bool in_flight)
+          Config.Cpu = CPU_INTERPRETER;
+       else if (strcmp(var.value, "enabled") == 0)
+          Config.Cpu = CPU_DYNAREC;
++#if defined(IOS) && !defined(DRC_DISABLE)
++      if (!ios_jit_available())
++         Config.Cpu = CPU_INTERPRETER;
++#endif
+ 
+       psxCpu = (Config.Cpu == CPU_INTERPRETER) ? &psxInt : &psxRec;
+       if (psxCpu != prev_cpu)
+@@ -3923,6 +3939,10 @@ void retro_init(void)
+    psxUnmapHook = pl_vita_munmap;
+ #endif
+    ret = emu_core_preinit();
++#if defined(IOS) && !defined(DRC_DISABLE)
++   if (!ios_jit_available())
++      Config.Cpu = CPU_INTERPRETER;
++#endif
+ #ifdef _3DS
+    /* emu_core_preinit sets the cpu to dynarec */
+    if (!__ctr_svchax)

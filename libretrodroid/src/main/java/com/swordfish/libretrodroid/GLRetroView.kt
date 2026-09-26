@@ -17,6 +17,10 @@
 
 package com.swordfish.libretrodroid
 
+import com.libretrodroid.netplay.HostStart
+import com.libretrodroid.netplay.NetplayEmulator
+import com.libretrodroid.netplay.NetplayListener
+
 import android.app.ActivityManager
 import android.content.Context
 import android.graphics.PointF
@@ -65,6 +69,10 @@ class GLRetroView(
         runOnEmulationThread(true) {
             LibretroDroid.setViewport(value.left, value.top, value.width(), value.height())
         }
+    }
+
+    var aspectRatioOverride: Float by Delegates.observable(0f) { _, _, value ->
+        runOnEmulationThread(true) { LibretroDroid.setAspectRatioOverride(value) }
     }
 
     var viewportAlignment: ViewportAlignment by Delegates.observable(ViewportAlignment.CENTER) { _, _, value ->
@@ -208,6 +216,86 @@ class GLRetroView(
         return rumbleEventsSubject
     }
 
+    @Volatile
+    var netplayListener: NetplayListener? = null
+
+    val coreVersion: String get() = LibretroDroid.coreVersion()
+
+    fun netplayEmulator(rollback: Boolean, recompilerOption: String? = null, minInputDelay: Int = 0): NetplayEmulator = object : NetplayEmulator {
+        override val rollback = rollback
+        override val minInputDelay = minInputDelay
+        override val canRecompile = recompilerOption != null
+        override fun setRecompiler(enabled: Boolean) {
+            val key = recompilerOption ?: return
+            runOnEmulationThread(true) { LibretroDroid.updateVariable(Variable(key, if (enabled) "enabled" else "disabled")) }
+        }
+        override fun startAsHost(players: Int, inputDelay: Int) = startNetplayAsHost(players, inputDelay, rollback)
+        override fun startAsClient(port: Int, players: Int, inputDelay: Int, state: ByteArray, saveRam: ByteArray?) =
+            startNetplayAsClient(port, players, inputDelay, rollback, state, saveRam)
+        override fun stop() = stopNetplay()
+        override fun pushInput(port: Int, frame: Int, buttons: Int) = pushNetplayInput(port, frame, buttons)
+        override fun reset() = this@GLRetroView.reset()
+    }
+
+    fun startNetplayAsHost(players: Int, inputDelay: Int, rollback: Boolean, hashInterval: Int = DEFAULT_HASH_INTERVAL): HostStart =
+        runOnEmulationThread(true) {
+            LibretroDroid.startNetplay(0, players, inputDelay, hashInterval, rollback)
+            HostStart(LibretroDroid.serializeState(), LibretroDroid.serializeSRAM().takeIf { it.isNotEmpty() })
+        }
+
+    private var ownSaveRam: ByteArray? = null
+
+    fun startNetplayAsClient(
+        localPort: Int,
+        players: Int,
+        inputDelay: Int,
+        rollback: Boolean,
+        state: ByteArray,
+        saveRam: ByteArray?,
+        hashInterval: Int = DEFAULT_HASH_INTERVAL,
+    ): Boolean =
+        runOnEmulationThread(true) {
+            if (saveRam != null) {
+                if (ownSaveRam == null) ownSaveRam = LibretroDroid.serializeSRAM()
+                LibretroDroid.unserializeSRAM(saveRam)
+            }
+            LibretroDroid.startNetplay(localPort, players, inputDelay, hashInterval, rollback)
+            val loaded = LibretroDroid.unserializeState(state)
+            if (!loaded) LibretroDroid.stopNetplay()
+            loaded
+        }
+
+    fun stopNetplay() = runOnEmulationThread(true) {
+        LibretroDroid.stopNetplay()
+        ownSaveRam?.let { LibretroDroid.unserializeSRAM(it) }
+        ownSaveRam = null
+    }
+
+    @Volatile
+    private var redrawOnly = false
+
+    fun redraw() {
+        redrawOnly = true
+        requestRender()
+    }
+
+    fun pushNetplayInput(port: Int, frame: Int, buttons: Int) = LibretroDroid.setNetplayInput(port, frame, buttons)
+
+    val netplayFrame: Int get() = LibretroDroid.netplayFrame()
+
+    val netplayStalls: Int get() = LibretroDroid.netplayStalls()
+
+    @Suppress("unused")
+    private fun onNetplayOutgoing(type: Int, frame: Int, value: Long) {
+        val listener = netplayListener ?: return
+        when (type) {
+            NETPLAY_LOCAL_INPUT -> listener.onLocalInput(frame, value.toInt())
+            NETPLAY_STATE_HASH -> listener.onStateHash(frame, value)
+            2 -> listener.onPerformance(frame, value)
+            in 100..227 -> listener.onStateDiagnostic(frame, type - 100, value)
+        }
+    }
+
     fun getControllers(): Array<Array<Controller>> {
         return LibretroDroid.getControllers()
     }
@@ -298,7 +386,6 @@ class GLRetroView(
         return super.onGenericMotionEvent(event)
     }
 
-    // These functions are called only after the GLSurfaceView has been created.
     private inner class RenderLifecycleObserver : LifecycleObserver {
         @OnLifecycleEvent(Lifecycle.Event.ON_RESUME)
         private fun resume() = catchExceptions {
@@ -317,7 +404,10 @@ class GLRetroView(
 
     inner class Renderer : GLSurfaceView.Renderer {
         override fun onDrawFrame(gl: GL10) = catchExceptions {
-            if (isEmulationReady) {
+            if (isEmulationReady && redrawOnly) {
+                redrawOnly = false
+                LibretroDroid.redraw()
+            } else if (isEmulationReady) {
                 LibretroDroid.step(this@GLRetroView)
                 lifecycle?.coroutineScope?.launch {
                     retroGLEventsSubject.emit(GLRetroEvents.FrameRendered)
@@ -330,7 +420,6 @@ class GLRetroView(
             LibretroDroid.onSurfaceChanged(width, height)
         }
 
-
         override fun onSurfaceCreated(gl: GL10, config: EGLConfig) = catchExceptions {
             Thread.currentThread().priority = Thread.MAX_PRIORITY
             initializeCore()
@@ -340,7 +429,6 @@ class GLRetroView(
         }
     }
 
-    // These functions are called from the GL thread.
     private fun initializeCore() = catchExceptions {
         if (isGameLoaded) return@catchExceptions
         when {
@@ -485,7 +573,6 @@ class GLRetroView(
             .associate { (key, value) -> key to value!! }
     }
 
-    /** This function gets called from the jni side.*/
     private fun sendRumbleEvent(port: Int, strengthWeak: Float, strengthStrong: Float) {
         lifecycle?.coroutineScope?.launch {
             rumbleEventsSubject.emit(RumbleEvent(port, strengthWeak, strengthStrong))
@@ -519,5 +606,11 @@ class GLRetroView(
         const val ERROR_GENERIC = LibretroDroid.ERROR_GENERIC
 
         private val TOUCH_EVENT_OUTSIDE = PointF(-10f, 10f)
+
+        // Full PCSX serialization is several MiB and runs on the emulation
+        // thread. Keep diagnostics sparse so they do not become frame hitches.
+        private const val DEFAULT_HASH_INTERVAL = 600
+        private const val NETPLAY_LOCAL_INPUT = 0
+        private const val NETPLAY_STATE_HASH = 1
     }
 }

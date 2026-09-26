@@ -20,7 +20,6 @@ package com.swordfish.libretrodroid;
 import java.util.List;
 
 public class LibretroDroid {
-
     static {
         System.loadLibrary("libretrodroid");
     }
@@ -107,6 +106,14 @@ public class LibretroDroid {
 
     public static native void step(GLRetroView retroView);
 
+    public static native void startNetplay(int localPort, int players, int inputDelay, int hashInterval, boolean rollback);
+    public static native void stopNetplay();
+    public static native void redraw();
+    public static native void setNetplayInput(int port, int frame, int buttons);
+    public static native int netplayFrame();
+    public static native int netplayStalls();
+    public static native String coreVersion();
+
     public static native void reset();
 
     public static native void setRumbleEnabled(boolean enabled);
@@ -138,6 +145,7 @@ public class LibretroDroid {
     public static native void onKeyEvent(int port, int action, int keyCode);
 
     public static native void refreshAspectRatio();
+    public static native void setAspectRatioOverride(float ratio);
 
     public static native Controller[][] getControllers();
     public static native void setControllerType(int port, int type);

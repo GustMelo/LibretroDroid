@@ -45,7 +45,6 @@ object KtUtils {
                     await()
                     return
                 } catch (e: InterruptedException) {
-
                 }
             }
         } finally {
