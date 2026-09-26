@@ -17,9 +17,10 @@ jobs:
           java-version: 21
       - uses: android-actions/setup-android@v3
         with:
+          cmdline-tools-version: 15859902
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
-      - run: sdkmanager 'platforms;android-37' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - run: sdkmanager 'platforms;android-37.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - uses: gradle/actions/setup-gradle@v4
       - run: scripts/test-native.sh
       - run: ./gradlew :netplay:testAndroidHostTest :libretrodroid:assembleRelease
