@@ -6,6 +6,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -35,5 +36,7 @@ jobs:
             exit 1
           fi
           git push origin "$branch"
+          # GITHUB_TOKEN pushes do not trigger the push/PR validation workflow.
+          gh workflow run validate.yml --ref "$branch"
           echo 'Review the upstream changes and run Validate library on this branch before merging. Artifacts and consumer lock files are not updated automatically.' > "$RUNNER_TEMP/body.md"
           gh pr create --base multiplatform --head "$branch" --title "Update upstream to $sha" --body-file "$RUNNER_TEMP/body.md"
