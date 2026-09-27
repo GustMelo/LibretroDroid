@@ -40,6 +40,8 @@ public:
     void updateViewportAlignment(unsigned int viewportAlignment);
 
     void updateRotation(float rotation);
+    // Flips the picture vertically, e.g. to read an offscreen target back top row first.
+    void flipVertically();
 
     std::array<float, 12>& getForegroundVertices() { return foregroundVertices; }
     std::array<float, 12>& getBackgroundVertices() { return backgroundVertices; }

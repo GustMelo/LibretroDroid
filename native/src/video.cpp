@@ -142,7 +142,7 @@ void Video::renderFrame() {
 
     glDisable(GL_DEPTH_TEST);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFramebuffer);
     glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -163,7 +163,7 @@ void Video::renderFrame() {
         auto passData = renderer->getPassData(i);
         auto isLastPass = i == shadersChain.size() - 1;
 
-        glBindFramebuffer(GL_FRAMEBUFFER, passData.framebuffer.value_or(0));
+        glBindFramebuffer(GL_FRAMEBUFFER, passData.framebuffer.value_or(targetFramebuffer));
 
         glViewport(
             0,
@@ -210,6 +210,21 @@ void Video::renderFrame() {
 
         glUseProgram(0);
     }
+}
+
+void Video::renderTo(unsigned framebuffer, unsigned width, unsigned height) {
+    VideoLayout screen = videoLayout;
+    bool dirty = isDirty;
+    videoLayout.updateScreenSize(width, height);
+    videoLayout.updateViewportSize(Rect(0.0F, 0.0F, 1.0F, 1.0F));
+    // glReadPixels returns the bottom row first: render upside down so readers get the top row first.
+    videoLayout.flipVertically();
+    targetFramebuffer = framebuffer;
+    isDirty = true;
+    renderFrame();
+    targetFramebuffer = 0;
+    videoLayout = screen;
+    isDirty = dirty;
 }
 
 float Video::getScreenDensity() {

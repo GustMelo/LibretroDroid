@@ -633,6 +633,17 @@ void LibretroDroid::redraw() {
     video->renderFrame();
 }
 
+void LibretroDroid::renderTo(unsigned framebuffer, unsigned width, unsigned height) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    if (video) video->renderTo(framebuffer, width, height);
+}
+
+bool LibretroDroid::setMultitap(bool enabled) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    applyMultitapLocked(enabled);
+    return multitapEnabled;
+}
+
 void LibretroDroid::stopNetplay() {
     std::lock_guard<std::mutex> lock(coreLock);
     Netplay::getInstance().stop();

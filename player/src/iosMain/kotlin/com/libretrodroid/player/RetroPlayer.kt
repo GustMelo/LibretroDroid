@@ -30,6 +30,11 @@ import com.libretrodroid.engine.native.re_resume
 import com.libretrodroid.engine.native.re_serialize
 import com.libretrodroid.engine.native.re_serialize_sram
 import com.libretrodroid.engine.native.re_set_buttons
+import com.libretrodroid.engine.native.re_set_audio_tap
+import com.libretrodroid.engine.native.re_set_motion
+import com.libretrodroid.engine.native.re_set_multitap
+import com.libretrodroid.engine.native.re_stream_frame
+import com.libretrodroid.engine.native.re_stream_stop
 import com.libretrodroid.engine.native.re_surface_changed
 import com.libretrodroid.engine.native.re_surface_created
 import com.libretrodroid.engine.native.re_unserialize
@@ -37,6 +42,8 @@ import com.libretrodroid.engine.native.re_unserialize_sram
 import com.libretrodroid.netplay.HostStart
 import com.libretrodroid.netplay.NetplayEmulator
 import com.libretrodroid.netplay.NetplayListener
+import kotlinx.atomicfu.AtomicIntArray
+import kotlinx.atomicfu.AtomicLongArray
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
@@ -70,6 +77,7 @@ import platform.CoreGraphics.CGRectZero
 import platform.Foundation.NSData
 import platform.Foundation.NSDate
 import platform.Foundation.dataWithBytes
+import platform.Foundation.dataWithBytesNoCopy
 import platform.Foundation.NSDefaultRunLoopMode
 import platform.Foundation.NSLocale
 import platform.Foundation.NSRunLoop
@@ -106,10 +114,31 @@ data class RetroGame(
 
     val netplayMinDelay: Int = 0,
 
+    /** Deprecated in favour of [aspectRatio]; true is [AspectRatio.FILL]. */
     val widescreen: Boolean = false,
+    /** [AspectRatio.CORE], [AspectRatio.FILL] or a fixed width/height ratio such as 16/9. */
+    val aspectRatio: Float = AspectRatio.CORE,
 )
 
+/** Picture shape. Nothing is cropped: the core's and fixed ratios are letterboxed inside the view. */
+object AspectRatio {
+    /** The core's own ratio. */
+    const val CORE = 0f
+
+    /** Stretches to the view, and to the frame while streaming. */
+    const val FILL = -1f
+}
+
 class RetroFrame(val pixels: NSData, val width: Int, val height: Int)
+
+/**
+ * Receives the game while it streams. [video]: RGBA rows, top row first, on the render thread.
+ * [audio]: 48 kHz interleaved 16-bit stereo, on the audio thread. The data is only valid during the call.
+ */
+interface RetroStreamSink {
+    fun video(pixels: NSData, width: Int, height: Int)
+    fun audio(samples: NSData, frames: Int)
+}
 
 class RetroPlayer(
     private val game: RetroGame,
@@ -129,9 +158,16 @@ class RetroPlayer(
 
     private val gamepads = GamepadInput()
     private val touchButtons = atomic(0)
+    private val remoteButtons = AtomicIntArray(PORTS)
+    private val remoteAxes = AtomicLongArray(PORTS)
+    private val appliedAxes = LongArray(PORTS)
+    @Volatile private var localPort = 0
+    @Volatile private var sink: RetroStreamSink? = null
+    private var streamSize = 0 to 0
+    private var sinkRef: StableRef<RetroPlayer>? = null
     @Volatile private var running = false
     @Volatile private var paused = false
-    private var widescreen = game.widescreen
+    private var aspectRatio = if (game.widescreen) AspectRatio.FILL else game.aspectRatio
     private var ready = false
     private var sramOnExit: ByteArray? = null
     private val stopped = dispatch_semaphore_create(0)
@@ -141,6 +177,43 @@ class RetroPlayer(
 
     fun setTouchButtons(mask: Int) {
         touchButtons.value = mask
+    }
+
+    /** Port that this device's touch pad and controllers drive; -1 sends them nowhere. */
+    fun setLocalPort(port: Int) {
+        localPort = port.takeIf { it in 0 until PORTS } ?: -1
+    }
+
+    /**
+     * Input of a player on another device. Axes are signed 16-bit, +y down: left stick, right stick.
+     * Applied at the next frame, like local input.
+     */
+    fun setRemoteInput(port: Int, buttons: Int, lx: Int, ly: Int, rx: Int, ry: Int) {
+        if (port !in 0 until PORTS) return
+        remoteButtons[port].value = buttons and 0xffff
+        remoteAxes[port].value = pack(lx, ly, rx, ry)
+    }
+
+    /** Up to four players on cores with a multitap; returns whether it is active. */
+    fun setMultitap(enabled: Boolean): Boolean = onRenderThread { re_set_multitap(enabled) }
+
+    /** Streams at [width] x [height] (letterboxed) until [stopStream]. The screen keeps playing too. */
+    fun startStream(width: Int, height: Int, sink: RetroStreamSink) = onRenderThread {
+        stopStreamOnRenderThread()
+        streamSize = width to height
+        this.sink = sink
+        val ref = StableRef.create(this).also { sinkRef = it }
+        re_set_audio_tap(streamAudio, ref.asCPointer())
+    }
+
+    fun stopStream() = onRenderThread { stopStreamOnRenderThread() }
+
+    private fun stopStreamOnRenderThread() {
+        re_set_audio_tap(null, null)
+        sinkRef?.dispose()
+        sinkRef = null
+        sink = null
+        re_stream_stop()
     }
 
     fun setPaused(paused: Boolean) = onRenderThread {
@@ -172,8 +245,11 @@ class RetroPlayer(
 
     override fun reset() = onRenderThread { re_reset() }
 
-    fun setWidescreen(enabled: Boolean) = onRenderThread {
-        widescreen = enabled
+    fun setWidescreen(enabled: Boolean) = setAspectRatio(if (enabled) AspectRatio.FILL else AspectRatio.CORE)
+
+    /** [AspectRatio.CORE], [AspectRatio.FILL] or a fixed width/height ratio such as 16/9. */
+    fun setAspectRatio(ratio: Float) = onRenderThread {
+        aspectRatio = ratio
         applyAspectRatio()
 
         if (paused) re_redraw()
@@ -264,6 +340,7 @@ class RetroPlayer(
         } finally {
             link?.invalidate()
             runPendingTasks()
+            stopStreamOnRenderThread()
             sramOnExit = takeBytes { re_serialize_sram(it) }
             re_destroy()
             re_detach_layer()
@@ -302,8 +379,24 @@ class RetroPlayer(
             if (paused) re_redraw()
         }
         if (paused) return
-        re_set_buttons(0u, (gamepads.buttons or touchButtons.value).toUShort())
+        val local = gamepads.buttons or touchButtons.value
+        for (port in 0 until PORTS) {
+            val mask = remoteButtons[port].value or if (port == localPort) local else 0
+            re_set_buttons(port.toUInt(), mask.toUShort())
+            val axes = remoteAxes[port].value
+            if (axes != appliedAxes[port]) {
+                appliedAxes[port] = axes
+                re_set_motion(port.toUInt(), SOURCE_LEFT, axis(axes, 0), axis(axes, 1))
+                re_set_motion(port.toUInt(), SOURCE_RIGHT, axis(axes, 2), axis(axes, 3))
+            }
+        }
         re_frame(outgoing, self)
+        if (sink != null) streamSize.let { (w, h) ->
+            // FILL means the frame's shape here, not the phone's: the TV would get a narrow portrait picture.
+            if (aspectRatio == AspectRatio.FILL) re_set_aspect_ratio_override(overrideFor(w, h))
+            re_stream_frame(w, h, streamVideo, self)
+            if (aspectRatio == AspectRatio.FILL) applyAspectRatio()
+        }
         if (!ready) {
             ready = true
             dispatch_async(dispatch_get_main_queue()) { onReady?.invoke() }
@@ -312,7 +405,13 @@ class RetroPlayer(
 
     private fun applyAspectRatio() {
         val (w, h) = (view as GameView).pixelSize
-        re_set_aspect_ratio_override(if (widescreen && h > 1) w.toFloat() / h else 0f)
+        re_set_aspect_ratio_override(overrideFor(w, h))
+    }
+
+    private fun overrideFor(width: Int, height: Int): Float = when {
+        aspectRatio > 0f -> aspectRatio
+        aspectRatio == AspectRatio.FILL && height > 1 -> width.toFloat() / height
+        else -> AspectRatio.CORE
     }
 
     private fun fail(message: String) {
@@ -350,6 +449,24 @@ class RetroPlayer(
     private companion object {
 
         const val HASH_INTERVAL = 600
+        const val PORTS = 4
+        const val SOURCE_LEFT = 1
+        const val SOURCE_RIGHT = 2
+
+        fun pack(lx: Int, ly: Int, rx: Int, ry: Int): Long =
+            listOf(lx, ly, rx, ry).fold(0L) { packed, value -> (packed shl 16) or (value.toLong() and 0xffff) }
+
+        fun axis(packed: Long, index: Int): Float = ((packed shr ((3 - index) * 16)) and 0xffff).toInt().toShort() / 32767f
+
+        val streamVideo = staticCFunction { context: COpaquePointer?, rgba: kotlinx.cinterop.CPointer<UByteVar>?, width: Int, height: Int ->
+            val sink = context!!.asStableRef<RetroPlayer>().get().sink ?: return@staticCFunction
+            sink.video(NSData.dataWithBytesNoCopy(rgba, (width * height * 4).convert(), false), width, height)
+        }
+
+        val streamAudio = staticCFunction { context: COpaquePointer?, samples: kotlinx.cinterop.CPointer<kotlinx.cinterop.ShortVar>?, count: ULong ->
+            val sink = context!!.asStableRef<RetroPlayer>().get().sink ?: return@staticCFunction
+            sink.audio(NSData.dataWithBytesNoCopy(samples, (count * 4u).convert(), false), count.toInt())
+        }
 
         val outgoing = staticCFunction { context: COpaquePointer?, type: Int, frame: UInt, value: ULong ->
             val listener = context!!.asStableRef<RetroPlayer>().get().netplayListener ?: return@staticCFunction

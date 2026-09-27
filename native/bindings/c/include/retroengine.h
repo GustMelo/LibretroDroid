@@ -67,6 +67,24 @@ void re_netplay_start(int local_port, int players, int input_delay, int hash_int
 void re_netplay_stop(void);
 void re_netplay_set_input(int port, uint32_t frame, uint16_t buttons);
 
+/* Analog input for any port. source: 0 d-pad, 1 left stick, 2 right stick; axes in [-1, 1], +y down. */
+void re_set_motion(unsigned port, int source, float x, float y);
+/* Multitap on port 2 when the core offers one (up to four players); false restores a plain pad.
+ * Returns whether the multitap is now active. */
+bool re_set_multitap(bool enabled);
+
+/*
+ * Streaming. After re_frame, on the render thread: renders the frame again into an offscreen
+ * width x height RGBA target and hands over the previous frame's pixels (top row first),
+ * read back asynchronously so the GPU is never stalled. Valid only during the callback.
+ */
+typedef void (*re_video_fn)(void *context, const uint8_t *rgba, int width, int height);
+void re_stream_frame(int width, int height, re_video_fn video, void *context);
+void re_stream_stop(void);
+/* Game audio as played: 48 kHz interleaved stereo, called on the audio thread. NULL removes it. */
+typedef void (*re_audio_fn)(void *context, const int16_t *frames, size_t count);
+void re_set_audio_tap(re_audio_fn audio, void *context);
+
 #ifdef __cplusplus
 }
 #endif

@@ -80,6 +80,10 @@ public:
 
     void markDirty() { isDirty = true; }
 
+    // Renders the current frame again into [framebuffer], letterboxed in width x height,
+    // with the same shader chain. The on-screen layout is left untouched.
+    void renderTo(unsigned framebuffer, unsigned width, unsigned height);
+
     uintptr_t getCurrentFramebuffer() {
         return renderer->getFramebuffer();
     };
@@ -104,6 +108,7 @@ private:
     std::optional<ShaderManager::Config> loadedShaderType = std::nullopt;
 
     bool isDirty = false;
+    unsigned targetFramebuffer = 0;
     bool skipDuplicateFrames = false;
 
     std::vector<ShaderChainEntry> shadersChain;

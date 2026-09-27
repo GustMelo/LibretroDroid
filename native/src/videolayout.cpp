@@ -19,6 +19,11 @@
 #include "log.h"
 
 namespace libretrodroid {
+void VideoLayout::flipVertically() {
+    bottomLeftOrigin = !bottomLeftOrigin;
+    updateBuffers();
+}
+
 VideoLayout::VideoLayout(bool bottomLeftOrigin, float rotation, Rect viewportRect, unsigned int viewportAlignment) :
     bottomLeftOrigin(bottomLeftOrigin),
     rotation(rotation),

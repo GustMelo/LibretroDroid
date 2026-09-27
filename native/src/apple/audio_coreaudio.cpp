@@ -20,9 +20,11 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "audio.h"
+#include "apple/audio_tap.h"
 #include "log.h"
 #include "resamplers/linearresampler.h"
 
@@ -64,6 +66,10 @@ private:
 };
 
 constexpr double OUTPUT_SAMPLE_RATE = 48000.0;
+
+std::mutex tapLock;
+AudioTap tap = nullptr;
+void *tapContext = nullptr;
 constexpr unsigned LOW_LATENCY_VIDEO_FRAMES = 4;
 }
 
@@ -129,6 +135,10 @@ struct Audio::Impl {
 
         fifo.readNow(temporary.data(), currentFramesToSubmit * 2);
         resampler.resample(temporary.data(), currentFramesToSubmit, output, numFrames);
+
+        // Never wait on the render thread: a tap being replaced just skips one buffer.
+        std::unique_lock<std::mutex> lock(tapLock, std::try_to_lock);
+        if (lock.owns_lock() && tap) tap(tapContext, output, static_cast<size_t>(numFrames));
     }
 
     AudioComponentInstance unit = nullptr;
@@ -160,5 +170,11 @@ void Audio::write(const int16_t *data, size_t frames) {
 
 void Audio::setPlaybackSpeed(double newPlaybackSpeed) {
     impl->playbackSpeed = newPlaybackSpeed;
+}
+
+void setAudioTap(AudioTap audio, void *context) {
+    std::lock_guard<std::mutex> lock(tapLock);
+    tap = audio;
+    tapContext = context;
 }
 }
