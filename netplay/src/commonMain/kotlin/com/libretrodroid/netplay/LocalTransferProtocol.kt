@@ -87,7 +87,7 @@ sealed interface TransferDecision {
     data class Reject(val reason: String) : TransferDecision
 }
 
-/** Framed asset transfer over an already authenticated TCP connection. */
+/** Framed asset transfer. The caller owns consent, integrity checks and connection lifetime. */
 class LocalTransferChannel(private val connection: TcpConnection) : okio.Closeable {
     fun sendManifest(manifest: TransferManifest) {
         connection.sink.write(LocalTransferProtocol.encode(manifest)).flush()
@@ -112,7 +112,7 @@ class LocalTransferChannel(private val connection: TcpConnection) : okio.Closeab
     fun sendFile(file: TransferFile, read: (offset: Long, maxBytes: Int) -> ByteArray): Long {
         var offset = 0L
         while (offset < file.size) {
-            val chunk = read(offset, CHUNK_SIZE).also { require(it.isNotEmpty() && it.size <= CHUNK_SIZE) }
+            val chunk = read(offset, CHUNK_SIZE).also { require(it.isNotEmpty() && it.size <= CHUNK_SIZE && it.size.toLong() <= file.size - offset) }
             val body = Buffer().apply { writeByte(2); writeLongLe(offset); writeIntLe(chunk.size); write(chunk) }
             writeFrame(body.readByteArray())
             offset += chunk.size
@@ -128,10 +128,10 @@ class LocalTransferChannel(private val connection: TcpConnection) : okio.Closeab
             when (body.readByte().toInt()) {
                 2 -> {
                     val offset = body.readLongLe(); val size = body.readIntLe()
-                    require(offset == received && size in 1..CHUNK_SIZE && body.size >= size)
+                    require(offset == received && size in 1..CHUNK_SIZE && body.size == size.toLong() && size.toLong() <= file.size - received)
                     write(offset, body.readByteArray(size.toLong())); received += size
                 }
-                3 -> { require(body.readLongLe() == received && received == file.size); return received }
+                3 -> { require(body.readLongLe() == received && received == file.size && body.exhausted()); return received }
                 else -> error("unexpected transfer frame")
             }
         }
