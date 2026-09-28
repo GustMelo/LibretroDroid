@@ -30,10 +30,12 @@ checkout() { # core, repo, commit
   if ! git -C "$src" cat-file -e "$3^{commit}" 2>/dev/null; then
     git -C "$src" fetch --quiet origin "$3" || git -C "$src" fetch --quiet --unshallow origin || git -C "$src" fetch --quiet origin
   fi
+  git -C "$src" reset --quiet --hard # drops files an earlier patch staged
   git -C "$src" checkout --quiet --force --detach "$3"
   git -C "$src" clean -qfdx >/dev/null
   for patch in "$CORES/patches/$1"/*.patch; do
-    [ -f "$patch" ] && git -C "$src" apply "$patch"
+    # --index: files a patch adds must survive the clean before each iOS slice.
+    [ -f "$patch" ] && git -C "$src" apply --index "$patch"
   done
   return 0
 }
