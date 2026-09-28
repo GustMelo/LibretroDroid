@@ -177,6 +177,31 @@ bool LibretroDroid::unserializeSRAM(int8_t* data, size_t size) {
     return true;
 }
 
+int LibretroDroid::linkMaxPlayers() {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return core && core->retro_link_max_players ? (int) core->retro_link_max_players() : 1;
+}
+
+bool LibretroDroid::linkSetPlayers(int count) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return core && core->retro_link_max_players && count > 0 && core->retro_link_set_players((unsigned) count);
+}
+
+void LibretroDroid::linkSetLocal(int player) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    if (core && core->retro_link_max_players && player >= 0) core->retro_link_set_local((unsigned) player);
+}
+
+void LibretroDroid::linkSetGrid(bool grid) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    if (core && core->retro_link_max_players) core->retro_link_set_grid(grid);
+}
+
+bool LibretroDroid::linkLoadSave(int player, const int8_t* data, size_t size) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return core && core->retro_link_max_players && player >= 0 && core->retro_link_load_save((unsigned) player, data, size);
+}
+
 std::pair<int8_t*, size_t> LibretroDroid::serializeSRAM() {
     std::lock_guard<std::mutex> lock(coreLock);
 

@@ -151,6 +151,13 @@ public class LibretroDroid {
     public static native byte[] serializeSRAM();
     public static native boolean unserializeSRAM(byte[] sram);
 
+    // Consoles linked inside a retrolink core, console p on controller port p. Max is 1 without one.
+    public static native int linkMaxPlayers();
+    public static native boolean linkSetPlayers(int count);
+    public static native void linkSetLocal(int player);
+    public static native void linkSetGrid(boolean grid);
+    public static native boolean linkLoadSave(int player, byte[] save);
+
     public static native void updateVariable(Variable variable);
     public static native Variable[] getVariables();
 

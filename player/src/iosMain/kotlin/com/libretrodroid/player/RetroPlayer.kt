@@ -20,6 +20,11 @@ import com.libretrodroid.engine.native.re_detach_layer
 import com.libretrodroid.engine.native.re_frame
 import com.libretrodroid.engine.native.re_jit_available
 import com.libretrodroid.engine.native.re_set_variable
+import com.libretrodroid.engine.native.re_link_load_save
+import com.libretrodroid.engine.native.re_link_max_players
+import com.libretrodroid.engine.native.re_link_set_grid
+import com.libretrodroid.engine.native.re_link_set_local
+import com.libretrodroid.engine.native.re_link_set_players
 import com.libretrodroid.engine.native.re_free
 import com.libretrodroid.engine.native.re_last_error
 import com.libretrodroid.engine.native.re_load_game
@@ -311,10 +316,47 @@ class RetroPlayer(
 
         check(!isLinkActive)
         re_netplay_start(0, players, inputDelay, HASH_INTERVAL, rollback)
+        val state = takeBytes { re_serialize(it) } ?: ByteArray(0)
+        // Linked consoles: loading the state rebuilds the cable, exactly as on every joining device.
+        if (re_link_max_players() > 1) state.load { data, size -> re_unserialize(data, size) }
         HostStart(
-            state = takeBytes { re_serialize(it) } ?: ByteArray(0),
+            state = state,
             saveRam = takeBytes { re_serialize_sram(it) }?.takeIf { it.isNotEmpty() },
         )
+    }
+
+    /** Consoles the core links inside itself (retrolink): 1 for an ordinary core. */
+    override val linkMaxPlayers: Int by lazy { onRenderThread { re_link_max_players() } }
+
+    private var linkLocal = 0
+
+    override fun linkConsoles(players: Int, saves: Map<Int, ByteArray>, rebuild: Boolean) = onRenderThread {
+        if (rebuild) re_link_set_players(1)
+        re_link_set_players(players)
+        saves.forEach { (port, save) -> save.load { data, size -> re_link_load_save(port, data, size) } }
+        Unit
+    }
+
+    override fun linkConsoleSave(port: Int): ByteArray? = onRenderThread {
+        re_link_set_local(port)
+        takeBytes { re_serialize_sram(it) }.also { re_link_set_local(linkLocal) }
+    }
+
+    override fun setLinkLocal(port: Int) = onRenderThread {
+        linkLocal = port
+        re_link_set_local(port)
+    }
+
+    override fun linkLocalSave(): ByteArray? = onRenderThread { takeBytes { re_serialize_sram(it) } }
+
+    /**
+     * Players sharing this device on a retrolink core: [players] linked consoles, controller port p on console p,
+     * shown side by side (a 2x2 grid for 3 or 4). 1 goes back to a single console.
+     */
+    fun setLocalLinkPlayers(players: Int): Boolean = onRenderThread {
+        val linked = re_link_set_players(players)
+        re_link_set_grid(linked && players > 1)
+        linked
     }
 
     override fun startAsClient(port: Int, players: Int, inputDelay: Int, state: ByteArray, saveRam: ByteArray?): Boolean = onRenderThread {

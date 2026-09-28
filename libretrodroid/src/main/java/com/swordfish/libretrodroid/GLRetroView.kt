@@ -275,13 +275,46 @@ class GLRetroView(
         override fun stop() = stopNetplay()
         override fun pushInput(port: Int, frame: Int, buttons: Int) = pushNetplayInput(port, frame, buttons)
         override fun reset() = this@GLRetroView.reset()
+        override val linkMaxPlayers: Int get() = this@GLRetroView.linkMaxPlayers
+        override fun linkConsoles(players: Int, saves: Map<Int, ByteArray>, rebuild: Boolean) = runOnEmulationThread(true) {
+            if (rebuild) LibretroDroid.linkSetPlayers(1)
+            LibretroDroid.linkSetPlayers(players)
+            saves.forEach { (port, save) -> LibretroDroid.linkLoadSave(port, save) }
+        }
+        override fun linkConsoleSave(port: Int): ByteArray? = runOnEmulationThread(true) {
+            LibretroDroid.linkSetLocal(port)
+            LibretroDroid.serializeSRAM().also { LibretroDroid.linkSetLocal(linkLocal) }
+        }
+        override fun setLinkLocal(port: Int) = runOnEmulationThread(true) {
+            linkLocal = port
+            LibretroDroid.linkSetLocal(port)
+        }
+        override fun linkLocalSave(): ByteArray? = runOnEmulationThread(true) { LibretroDroid.serializeSRAM() }
+    }
+
+    /** Consoles the core links inside itself (retrolink): 1 for an ordinary core. */
+    val linkMaxPlayers: Int by lazy { runOnEmulationThread(true) { LibretroDroid.linkMaxPlayers() } }
+
+    @Volatile private var linkLocal = 0
+
+    /**
+     * Players sharing this device on a retrolink core: [players] linked consoles, controller port p on console p,
+     * shown side by side (a 2x2 grid for 3 or 4). 1 goes back to a single console.
+     */
+    fun setLocalLinkPlayers(players: Int): Boolean = runOnEmulationThread(true) {
+        val linked = LibretroDroid.linkSetPlayers(players)
+        LibretroDroid.linkSetGrid(linked && players > 1)
+        linked
     }
 
     fun startNetplayAsHost(players: Int, inputDelay: Int, rollback: Boolean, hashInterval: Int = DEFAULT_HASH_INTERVAL): HostStart =
         runOnEmulationThread(true) {
             check(!isLinkActive) { "Link and controller netplay are mutually exclusive" }
             LibretroDroid.startNetplay(0, players, inputDelay, hashInterval, rollback)
-            HostStart(LibretroDroid.serializeState(), LibretroDroid.serializeSRAM().takeIf { it.isNotEmpty() })
+            val state = LibretroDroid.serializeState()
+            // Linked consoles: loading the state rebuilds the cable, exactly as on every joining device.
+            if (LibretroDroid.linkMaxPlayers() > 1) LibretroDroid.unserializeState(state)
+            HostStart(state, LibretroDroid.serializeSRAM().takeIf { it.isNotEmpty() })
         }
 
     private var ownSaveRam: ByteArray? = null

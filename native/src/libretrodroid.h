@@ -72,6 +72,13 @@ public:
     std::pair<int8_t *, size_t> serializeSRAM();
     bool unserializeSRAM(int8_t *data, size_t size);
 
+    // Consoles linked inside a retrolink core; 1 when the core has none.
+    int linkMaxPlayers();
+    bool linkSetPlayers(int count);
+    void linkSetLocal(int player);
+    void linkSetGrid(bool grid);
+    bool linkLoadSave(int player, const int8_t *data, size_t size);
+
     void onSurfaceCreated();
     void onSurfaceChanged(unsigned int width, unsigned int height);
 

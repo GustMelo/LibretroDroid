@@ -54,6 +54,56 @@ class NetplaySessionTest {
     private fun session(emulator: NetplayEmulator, gameKey: String, name: String, statuses: Statuses) =
         NetplaySession(emulator, gameKey, name) { statuses.add(it) }.also { sessions += it }
 
+    /** A retrolink core: records the consoles the session lays out and which one this device plays. */
+    private class LinkedEmulator(private val save: ByteArray) : NetplayEmulator {
+        private val lock = SynchronizedObject()
+        private val layouts = mutableListOf<Triple<Int, Map<Int, List<Byte>>, Boolean>>()
+        @kotlin.concurrent.Volatile var local = 0
+        @kotlin.concurrent.Volatile var clientSaveRam: ByteArray? = byteArrayOf(-1)
+        override val rollback = false
+        override val linkMaxPlayers = 4
+        override fun startAsHost(players: Int, inputDelay: Int) = HostStart(STATE, SAVE_RAM)
+        override fun startAsClient(port: Int, players: Int, inputDelay: Int, state: ByteArray, saveRam: ByteArray?): Boolean {
+            clientSaveRam = saveRam
+            return true
+        }
+        override fun stop() = Unit
+        override fun reset() = Unit
+        override fun pushInput(port: Int, frame: Int, buttons: Int) = Unit
+        override fun linkConsoles(players: Int, saves: Map<Int, ByteArray>, rebuild: Boolean) {
+            synchronized(lock) { layouts += Triple(players, saves.mapValues { it.value.toList() }, rebuild) }
+        }
+        override fun linkConsoleSave(port: Int) = "current $port".encodeToByteArray()
+        override fun setLinkLocal(port: Int) { local = port }
+        override fun linkLocalSave() = save
+        fun layouts() = synchronized(lock) { layouts.toList() }
+    }
+
+    @Test
+    fun linkedConsolesGetEachJoinersOwnSaveAndNoSharedSaveRam() {
+        val hostEmulator = LinkedEmulator("host save".encodeToByteArray())
+        val clientEmulator = LinkedEmulator("client save".encodeToByteArray())
+        val hostStatus = Statuses()
+        val clientStatus = Statuses()
+        val host = session(hostEmulator, "game", "host", hostStatus)
+        val client = session(clientEmulator, "game", "client", clientStatus)
+
+        client.join(LanGame("s", "game", "host", SocketAddress("127.0.0.1", host.host()), 0))
+        waitUntil { clientStatus.last() is NetplayStatus.Playing && hostStatus.last() is NetplayStatus.Playing }
+
+        val (players, saves, rebuild) = hostEmulator.layouts().single()
+        assertEquals(2, players)
+        assertEquals(false, rebuild)
+        assertEquals(mapOf(1 to "client save".encodeToByteArray().toList()), saves)
+        assertEquals(0, hostEmulator.local)
+        assertEquals(1, clientEmulator.local)
+        assertEquals(null, clientEmulator.clientSaveRam)
+
+        client.close()
+        waitUntil { hostStatus.last() == NetplayStatus.Solo }
+        assertEquals(Triple(1, emptyMap<Int, List<Byte>>(), false), hostEmulator.layouts().last())
+    }
+
     @Test
     fun clientJoinsWithHostStateAndInputsFlowBothWays() {
         val hostEmulator = FakeEmulator()

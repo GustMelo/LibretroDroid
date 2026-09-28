@@ -18,6 +18,24 @@ interface NetplayEmulator {
     val canRecompile: Boolean get() = false
 
     fun setRecompiler(enabled: Boolean) = Unit
+
+    /**
+     * Consoles the core links inside itself (retrolink), one per player: port p plays console p with its own
+     * save and only input crosses the network. 1 means an ordinary game where every port shares one console.
+     */
+    val linkMaxPlayers: Int get() = 1
+
+    /** Host: one console per player. [saves] boot the consoles they name; [rebuild] boots every console but 0. */
+    fun linkConsoles(players: Int, saves: Map<Int, ByteArray>, rebuild: Boolean) = Unit
+
+    /** Host: the save RAM of console [port] as it is now. */
+    fun linkConsoleSave(port: Int): ByteArray? = null
+
+    /** This device plays console [port]: its picture, its sound and the save RAM the app keeps. */
+    fun setLinkLocal(port: Int) = Unit
+
+    /** The save of the console this device plays, sent to the host when joining. */
+    fun linkLocalSave(): ByteArray? = null
 }
 
 class HostStart(val state: ByteArray, val saveRam: ByteArray?)

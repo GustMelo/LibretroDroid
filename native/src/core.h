@@ -49,6 +49,13 @@ public:
     void (*retro_set_input_poll)(retro_input_poll_t);
     void (*retro_set_input_state)(retro_input_state_t);
 
+    // retrolink (optional): several consoles linked inside the core, console p on controller port p.
+    unsigned (*retro_link_max_players)(void) = nullptr;
+    bool (*retro_link_set_players)(unsigned count) = nullptr;
+    void (*retro_link_set_local)(unsigned player) = nullptr;
+    void (*retro_link_set_grid)(bool grid) = nullptr;
+    bool (*retro_link_load_save)(unsigned player, const void *data, size_t size) = nullptr;
+
     Core(const std::string& soCorePath);
     ~Core();
 

@@ -63,6 +63,16 @@ void Core::open(const std::string& soCorePath) {
     retro_set_audio_sample_batch = (void (*)(retro_audio_sample_batch_t)) get_symbol(libHandle, "retro_set_audio_sample_batch");
     retro_set_input_poll = (void (*)(retro_input_poll_t)) get_symbol(libHandle, "retro_set_input_poll");
     retro_set_input_state = (void (*)(retro_input_state_t)) get_symbol(libHandle, "retro_set_input_state");
+
+    retro_link_max_players = (unsigned (*)()) dlsym(libHandle, "retro_link_max_players");
+    retro_link_set_players = (bool (*)(unsigned)) dlsym(libHandle, "retro_link_set_players");
+    retro_link_set_local = (void (*)(unsigned)) dlsym(libHandle, "retro_link_set_local");
+    retro_link_set_grid = (void (*)(bool)) dlsym(libHandle, "retro_link_set_grid");
+    retro_link_load_save = (bool (*)(unsigned, const void*, size_t)) dlsym(libHandle, "retro_link_load_save");
+    if (!retro_link_max_players || !retro_link_set_players || !retro_link_set_local || !retro_link_set_grid ||
+        !retro_link_load_save) {
+        retro_link_max_players = nullptr;
+    }
 }
 
 void Core::close() {

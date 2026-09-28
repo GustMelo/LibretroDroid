@@ -5,7 +5,7 @@ import okio.ByteString
 
 object NetplayProtocol {
 
-    const val VERSION = 7
+    const val VERSION = 8
     const val REDUNDANCY = 8
     const val MAX_PLAYERS = 4
     const val MAX_INPUT_DELAY = 8
@@ -96,6 +96,8 @@ sealed interface ControlMessage {
         val name: String,
         val datagramPort: Int,
         val recompiler: Boolean = false,
+        /** Linked consoles: the joining player's own save, for the console the host gives them. */
+        val linkSave: ByteString = ByteString.EMPTY,
     ) : ControlMessage
 
     data class Welcome(val port: Int, val datagramPort: Int, val hostName: String, val token: Int) : ControlMessage
@@ -136,6 +138,7 @@ sealed interface ControlMessage {
                     is Hello -> {
                         writeByte(HELLO); writeIntLe(message.version); writeUtf8Field(message.gameKey); writeUtf8Field(message.name)
                         writeIntLe(message.datagramPort); writeByte(if (message.recompiler) 1 else 0)
+                        writeIntLe(message.linkSave.size); write(message.linkSave)
                     }
                     is Welcome -> { writeByte(WELCOME); writeByte(message.port); writeIntLe(message.datagramPort); writeUtf8Field(message.hostName); writeIntLe(message.token) }
                     is Reject -> { writeByte(REJECT); writeUtf8Field(message.reason) }
@@ -163,7 +166,10 @@ sealed interface ControlMessage {
                     val version = body.readIntLe()
 
                     if (version != NetplayProtocol.VERSION) Hello(version, "", "", 0)
-                    else Hello(version, body.readUtf8Field(), body.readUtf8Field(), body.readIntLe(), body.readByte() != 0.toByte())
+                    else Hello(
+                        version, body.readUtf8Field(), body.readUtf8Field(), body.readIntLe(), body.readByte() != 0.toByte(),
+                        body.readByteString(body.readIntLe().toLong()),
+                    )
                 }
                 WELCOME -> Welcome(body.readByte().toInt() and 0xFF, body.readIntLe(), body.readUtf8Field(), body.readIntLe())
                 REJECT -> Reject(body.readUtf8Field())

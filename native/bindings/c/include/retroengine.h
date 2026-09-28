@@ -53,6 +53,13 @@ uint8_t *re_serialize(size_t *size);
 bool re_unserialize(const uint8_t *data, size_t size);
 uint8_t *re_serialize_sram(size_t *size);
 bool re_unserialize_sram(const uint8_t *data, size_t size);
+
+/* Consoles linked inside a retrolink core (console p on controller port p); max is 1 without one. */
+int re_link_max_players(void);
+bool re_link_set_players(int count);
+void re_link_set_local(int player);
+void re_link_set_grid(bool grid);
+bool re_link_load_save(int player, const uint8_t *data, size_t size);
 void re_free(void *data);
 void re_reset(void);
 

@@ -34,6 +34,7 @@ class NetplaySession(
         @Volatile var jitterMillis: Double = 0.0,
 
         val recompiler: Boolean = false,
+        val linkSave: ByteString = ByteString.EMPTY,
         @Volatile var port: Int = 0,
         @Volatile var lastHeardNanos: Long = nanoTime(),
     ) {
@@ -129,7 +130,7 @@ class NetplaySession(
             learned.remove(token)
 
             val joinedRtt = synchronized(probeLock) { measureRtt(datagramAddress) }
-            val joined = Peer(connection, hello.name, datagramAddress, joinedRtt.rtt, joinedRtt.jitter, hello.recompiler)
+            val joined = Peer(connection, hello.name, datagramAddress, joinedRtt.rtt, joinedRtt.jitter, hello.recompiler, hello.linkSave)
             peer = joined
             synchronized(roster) {
                 if (clients.value.size + 1 >= maxPlayers) {
@@ -167,6 +168,11 @@ class NetplaySession(
             role = Role.NONE
             history = null
             emulator.stop()
+            if (linkLayout.isNotEmpty()) {
+                // The others kept their saves on their own devices: only this player's console stays.
+                emulator.linkConsoles(1, emptyMap(), rebuild = false)
+                linkLayout = emptyList()
+            }
             emulator.setRecompiler(emulator.canRecompile)
             publish(NetplayStatus.Solo)
             return
@@ -185,9 +191,13 @@ class NetplaySession(
         session = (session + 1) and 0xFF
         synchronized(historyLock) { history = InputHistory(0, session) }
         role = Role.HOST
+        val linked = emulator.linkMaxPlayers > 1
+        if (linked) prepareLinkedConsoles(peers)
         val start = emulator.startAsHost(players, delay)
+        if (linked) emulator.setLinkLocal(0)
         val state = start.state.toByteString()
-        val saveRam = start.saveRam?.toByteString() ?: ByteString.EMPTY
+        // Linked consoles carry every save in the state; a shared save would replace the joiner's own.
+        val saveRam = if (linked) ByteString.EMPTY else start.saveRam?.toByteString() ?: ByteString.EMPTY
         peers.forEach { peer ->
             runCatching {
                 synchronized(peer.sinkLock) {
@@ -198,6 +208,28 @@ class NetplaySession(
         lastResyncAt = nanoTime()
         resyncPending = false
         publishPlaying(delay)
+    }
+
+    /** Players in port order when the consoles were last laid out (index + 1 is the port). */
+    private var linkLayout: List<Peer> = emptyList()
+
+    /**
+     * One console per player. A newcomer's console boots with the save they sent; when a player left and
+     * ports moved, every console but the host's boots again with its player's current save, so nothing saved
+     * in the session is lost.
+     */
+    private fun prepareLinkedConsoles(peers: List<Peer>) {
+        val kept = linkLayout
+        val moved = kept.withIndex().any { (index, peer) -> peers.getOrNull(index) !== peer }
+        val saves = HashMap<Int, ByteArray>()
+        if (moved) {
+            val current = kept.withIndex().associate { (index, peer) -> peer to emulator.linkConsoleSave(index + 1) }
+            peers.forEachIndexed { index, peer -> saves[index + 1] = current[peer] ?: peer.linkSave.toByteArray() }
+        } else {
+            peers.forEachIndexed { index, peer -> if (index >= kept.size) saves[index + 1] = peer.linkSave.toByteArray() }
+        }
+        emulator.linkConsoles(peers.size + 1, saves, rebuild = moved)
+        linkLayout = peers
     }
 
     fun restartFromHost(prepare: () -> Unit) = startThread("netplay-restart") {
@@ -224,7 +256,10 @@ class NetplaySession(
     fun join(game: LanGame) = startThread("netplay-join") {
         try {
             val connection = TcpConnection.connect(game.address, timeoutMillis = 3_000)
-            connection.sink.write(ControlMessage.encode(ControlMessage.Hello(NetplayProtocol.VERSION, gameKey, deviceName, udp.localPort, emulator.canRecompile))).flush()
+            val linkSave = if (emulator.linkMaxPlayers > 1) emulator.linkLocalSave()?.toByteString() else null
+            connection.sink.write(ControlMessage.encode(ControlMessage.Hello(
+                NetplayProtocol.VERSION, gameKey, deviceName, udp.localPort, emulator.canRecompile, linkSave ?: ByteString.EMPTY,
+            ))).flush()
 
             when (val reply = ControlMessage.read(connection.source)) {
                 is ControlMessage.Reject -> {
@@ -255,6 +290,7 @@ class NetplaySession(
                         if (!emulator.startAsClient(message.port, message.players, message.inputDelay, message.state.toByteArray(), saveRam)) {
                             error("incompatible host state")
                         }
+                        if (emulator.linkMaxPlayers > 1) emulator.setLinkLocal(message.port)
                         publishPlaying(message.inputDelay, players = message.players)
                     }
                     ControlMessage.Bye -> break

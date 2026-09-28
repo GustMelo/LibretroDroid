@@ -65,6 +65,7 @@ class NetplayProtocolTest {
     fun controlMessagesRoundTripThroughAStream() {
         val messages = listOf(
             ControlMessage.Hello(NetplayProtocol.VERSION, "abc:snes9x:1", "Galaxy S22", 40_000, recompiler = true),
+            ControlMessage.Hello(NetplayProtocol.VERSION, "abc:mgba:1", "iPhone", 40_001, linkSave = "pokemon save".encodeUtf8()),
             ControlMessage.Welcome(port = 1, datagramPort = 41_000, hostName = "iPhone", token = 99),
             ControlMessage.Reject(RejectReason.GAME.wire),
             ControlMessage.Start(port = 1, players = 2, inputDelay = 2, state = "state".encodeUtf8(), session = 7, recompiler = true, saveRam = "card".encodeUtf8()),
