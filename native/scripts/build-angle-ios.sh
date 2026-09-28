@@ -15,9 +15,12 @@ cd "$ANGLE_WORK"
 if [ ! -d depot_tools ]; then
   git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
 fi
-export PATH="$ANGLE_WORK/depot_tools:$PATH"
+# depot_tools finds itself from the path it is invoked with, and cipd runs from another directory: a relative
+# path made it miss cipd_client_version.digests ("mac-arm64 is not supported"). Always use absolute paths.
+DEPOT_TOOLS="$ANGLE_WORK/depot_tools"
+export PATH="$DEPOT_TOOLS:$PATH"
 export DEPOT_TOOLS_UPDATE=0
-[ -f depot_tools/python3_bin_reldir.txt ] || depot_tools/ensure_bootstrap
+[ -f "$DEPOT_TOOLS/python3_bin_reldir.txt" ] || "$DEPOT_TOOLS/ensure_bootstrap"
 
 if [ ! -d angle/.git ]; then
   git clone https://chromium.googlesource.com/angle/angle
@@ -31,10 +34,11 @@ if [ ! -f ../.gclient ] && [ ! -f .gclient ]; then
   python3 scripts/bootstrap.py
 fi
 grep -q "target_os" .gclient || echo "target_os = ['ios']" >> .gclient
-if [ -d third_party/depot_tools ] && [ ! -f third_party/depot_tools/python3_bin_reldir.txt ]; then
-  third_party/depot_tools/ensure_bootstrap
-fi
 gclient sync --no-history --shallow
+# ANGLE's own depot_tools is an empty submodule until the sync fills it.
+if [ -x third_party/depot_tools/ensure_bootstrap ] && [ ! -f third_party/depot_tools/python3_bin_reldir.txt ]; then
+  "$PWD/third_party/depot_tools/ensure_bootstrap"
+fi
 
 build() { # $1 = pasta, $2 = device|simulator
   gn gen "out/$1" --args="
