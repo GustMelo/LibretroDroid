@@ -74,9 +74,10 @@ bool re_netpacket_start(uint16_t client_id);
 void re_netpacket_receive(const void *data, size_t size, uint16_t client_id);
 void re_netpacket_poll(void);
 void re_netpacket_stop(void);
-typedef void (*re_netpacket_packet_fn)(void *context, int flags, const void *data, size_t size,
-                                       uint16_t client_id, bool broadcast);
-void re_netpacket_drain(re_netpacket_packet_fn callback, void *context);
+typedef void (*re_netpacket_poll_fn)(void *context);
+void re_netpacket_set_poll(re_netpacket_poll_fn poll);
+bool re_netpacket_connected(uint16_t client_id);
+void re_netpacket_disconnected(uint16_t client_id);
 
 /* Analog input for any port. source: 0 d-pad, 1 left stick, 2 right stick; axes in [-1, 1], +y down. */
 void re_set_motion(unsigned port, int source, float x, float y);

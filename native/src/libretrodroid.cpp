@@ -36,6 +36,7 @@
 #include "fpssync.h"
 #include "input.h"
 #include "netplay.h"
+#include "netpacket.h"
 #include "netplay_state_hash.h"
 #include "state_hash_worker.h"
 #include "rumble.h"
@@ -423,6 +424,7 @@ void LibretroDroid::destroy() {
         Environment::getInstance().getHwContextDestroy()();
     }
 
+    Netpacket::getInstance().clear();
     core->retro_unload_game();
     core->retro_deinit();
 

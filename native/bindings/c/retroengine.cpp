@@ -307,9 +307,14 @@ void re_netpacket_poll(void) { libretrodroid::Netpacket::getInstance().poll(); }
 
 void re_netpacket_stop(void) { libretrodroid::Netpacket::getInstance().stop(); }
 
-void re_netpacket_drain(re_netpacket_packet_fn callback, void *context) {
-    libretrodroid::Netpacket::getInstance().drain(
-        context, reinterpret_cast<libretrodroid::Netpacket::PacketCallback>(callback));
+void re_netpacket_set_poll(re_netpacket_poll_fn poll) {
+    libretrodroid::Netpacket::getInstance().setPoll(poll);
+}
+bool re_netpacket_connected(uint16_t id) {
+    return libretrodroid::Netpacket::getInstance().connected(id);
+}
+void re_netpacket_disconnected(uint16_t id) {
+    libretrodroid::Netpacket::getInstance().disconnected(id);
 }
 
 void re_set_motion(unsigned port, int source, float x, float y) {

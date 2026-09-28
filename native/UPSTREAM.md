@@ -34,3 +34,10 @@ Third-party source currently vendored by the original extraction:
 
 Licenses and copyright notices remain with their corresponding source.
 The runtime is GPL-3.0; core and ANGLE terms are independent.
+
+## Local Netpacket ABI update
+
+The Netpacket section of libretro.h uses environment command 78 and the
+send/poll-receive ABI from Aelvryx/mgba-wifi-link's libretro header.
+The older experimental command 76 is deliberately not accepted.
+The rest of the vendored header remains at the revision above.

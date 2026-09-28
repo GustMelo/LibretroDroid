@@ -3,13 +3,12 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <mutex>
-#include <vector>
 
 #include "../third_party/libretro/libretro-common/include/libretro.h"
 
 namespace libretrodroid {
 
+// Core callbacks and transport registration are confined to the emulation thread.
 class Netpacket {
 public:
     using TransportSend = void (*)(void*, int, const void*, size_t, uint16_t, bool);
@@ -23,17 +22,18 @@ public:
     bool send(int flags, const void* data, size_t size, uint16_t clientId, bool broadcast);
     void receive(const void* data, size_t size, uint16_t clientId);
     void setTransport(void* context, TransportSend send);
-    using PacketCallback = void (*)(void*, int, const void*, size_t, uint16_t, bool);
-    void drain(void* context, PacketCallback callback);
+    using TransportPoll = void (*)(void*);
+    void setPoll(TransportPoll poll);
+    void pollReceive();
+    bool connected(uint16_t clientId);
+    void disconnected(uint16_t clientId);
 
 private:
     const retro_netpacket_callback* core = nullptr;
-    retro_netpacket_send_t sendFn = nullptr;
+    bool running = false;
     void* transportContext = nullptr;
     TransportSend transportSend = nullptr;
-    struct Outgoing { int flags; std::vector<uint8_t> data; uint16_t clientId; bool broadcast; };
-    std::mutex lock;
-    std::vector<Outgoing> outbox;
+    TransportPoll transportPoll = nullptr;
 };
 
 }
