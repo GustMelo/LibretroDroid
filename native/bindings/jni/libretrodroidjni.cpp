@@ -49,6 +49,8 @@
 #include "streamcapture.h"
 #include "audio_tap.h"
 
+extern "C" JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_stopNetpacket(JNIEnv*, jclass);
+
 namespace libretrodroid {
 extern "C" {
 #include "utils/utils.h"
@@ -496,6 +498,7 @@ JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_destroy(
     jclass obj
 ) {
     try {
+        Java_com_swordfish_libretrodroid_LibretroDroid_stopNetpacket(env, obj);
         LibretroDroid::getInstance().destroy();
     } catch (std::exception &exception) {
         LOGE("Error in destroy: %s", exception.what());

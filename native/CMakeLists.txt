@@ -56,6 +56,7 @@ if(ANDROID)
             src/android/microphone/microphone.cpp
             src/android/microphone/microphoneinterface.cpp
             bindings/jni/libretrodroidjni.cpp
+            bindings/jni/netpacketjni.cpp
             bindings/jni/utils/javautils.cpp
             bindings/jni/utils/jnistring.cpp
     )

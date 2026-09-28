@@ -115,6 +115,16 @@ public class LibretroDroid {
     /** 48 kHz interleaved 16-bit stereo into a direct buffer; returns the frames written. */
     public static native int readStreamAudio(java.nio.ByteBuffer buffer, int frames);
 
+    public interface NetpacketCallbacks {
+        void send(int flags, byte[] data, int target);
+        void pollReceive();
+    }
+    public static native boolean startNetpacket(int localId, NetpacketCallbacks callbacks);
+    public static native boolean connectNetpacket(int peerId);
+    public static native void receiveNetpacket(byte[] data, int size, int sender);
+    public static native void pollNetpacket();
+    public static native void stopNetpacket();
+
     public static native void startNetplay(int localPort, int players, int inputDelay, int hashInterval, boolean rollback);
     public static native void stopNetplay();
     public static native void redraw();
