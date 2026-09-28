@@ -1,46 +1,63 @@
-# Link Cable integration status
+# Link Cable
 
-This is work in progress. The app does not yet provide a working link session.
-The current release dependency remains unchanged.
+Two devices on the same LAN run their own copy of the game and connect their
+emulated link ports. No video or audio crosses the network. Android and iOS
+use the same cores from the same pinned commits, so they pair with each other.
 
-## Chosen transport boundary
+| System | Core | Link data path |
+| --- | --- | --- |
+| GB / GBC | `gambatte` (libretro/gambatte-libretro, patched) | Gambatte's serial socket, TCP port 56400 |
+| GBA | `mgba_link` (Aelvryx/mgba-wifi-link) | Libretro Netpacket over `NetpacketSession` |
 
-Use the current Libretro Netpacket ABI (environment command 78), not the old
-experimental command 76. Core start receives send and poll-receive callbacks;
-broadcast is destination 0xffff. Reliable ordering is provided by TCP.
-The native bridge must only invoke core callbacks on the emulation thread.
-Socket receiver threads must enqueue packets for that thread, never call the
-core directly. Stop must run before unloading the core shared library.
+These are separate cores from the regular `mgba`: an app loads them only for a
+link session, so ordinary save states and play are unaffected.
 
-KMP's NetpacketChannel frames opaque core messages with a bounded 64 KiB
-payload and reuses its receive buffer. It does not interpret emulated serial
-registers. Its buffer must be copied into bounded session storage before the
-next read if the consumer has not finished.
+## Pairing (KMP, shared)
+
+`LinkLobby` advertises on the existing `_libretrodroid._tcp` service with the
+game key `link|<rom>|<core>|<core version>`. Of two devices with the same key,
+the one that started later connects to the earlier one, so exactly one TCP
+connection exists. The hello checks the key again; a mismatch is rejected
+before any core sees data. The earlier device is `localId` 0 (host).
+
+- GB/GBC: the host sets `gambatte_gb_link_mode=Network Server`, the joiner
+  `Network Client` with the host's IPv4 address in the twelve
+  `gambatte_gb_link_network_server_ip_N` digits. The pairing connection stays
+  open as `LinkControl`, a one-second heartbeat that reports a vanished peer.
+- GBA: the pairing connection becomes the `NetpacketSession` transport; the
+  host is Netpacket client 0 and reports client 1 as connected.
+
+## Threading and lifetime
+
+The native bridge only invokes core callbacks on the emulation thread. Socket
+threads enqueue packets into bounded queues (64 packets, at most 4 MiB per
+direction); `pump()` delivers them before each frame. `closeNetwork()` never
+calls the core. Pausing the player, backgrounding it or destroying it stops the
+session before the core is unloaded.
+
+The Gambatte patch keeps a silent peer from freezing emulation: TCP_NODELAY,
+two-second send/receive timeouts, a one-second connect timeout, exact two-byte
+reads, SO_REUSEADDR and a monotonic reconnect throttle.
+
+While a link is active the players refuse save states, state loads, reset,
+fast-forward and controller netplay: each would desynchronize the two sides.
+Battery saves stay per player.
 
 ## GBA reference
 
-Aelvryx/mgba-wifi-link at 9e919b0cfbb93af7d1171570dfc6745d00eeebab
-is the evaluated reference, not yet the packaged app core. It uses replicated
-P0/P1 machines: each peer simulates both cartridges and synchronizes inputs.
-Local SIO scheduling therefore avoids a network round trip per serial word.
-This costs additional CPU and memory; measurements on devices remain required.
-Its current documented scope is two-player GBA Multi-Pak. This does not prove
-GB/GBC, four-player GBA, or arbitrary game compatibility.
+Aelvryx/mgba-wifi-link at 9e919b0cfbb93af7d1171570dfc6745d00eeebab replicates
+both machines on each device and synchronizes inputs, so serial words need no
+network round trip. Its documented scope is two-player Multi-Pak: Mario Kart:
+Super Circuit, Zelda: Four Swords and Advance Wars were qualified upstream.
+Single-Pak multiboot, the Wireless Adapter and four-player sessions are not
+supported.
 
-A host build and real-core lifecycle smoke test pass. The smoke test loads
-the supplied diagnostic ROM, registers Netpacket, starts/stops a host and
-unloads the core. It does NOT prove data exchange between two linked cores.
+## Limits
 
-## Remaining integration
+- Two players per link session.
+- Same LAN only; no internet relay.
+- GB/GBC link is a byte-for-byte serial exchange with a network round trip per
+  master transfer: trades and battles work; timing-critical real-time link
+  games may stutter on slow Wi-Fi.
 
-- Bounded session queues, handshake, timeout and close behavior.
-- JNI and Kotlin/Native bindings with emulation-thread dispatch.
-- GBA linked-pair integration and GB/GBC linked execution.
-- Independent local battery-save ownership; forbid unsafe live state loads.
-- App host/join UI, discovery, network permission and lifecycle integration.
-- Two-core diagnostic exchange, platform builds and physical-device validation.
-- Versioned artifacts, publication and app dependency update.
-
-The earlier LinkCableProtocol byte-transfer codec is not wired to any core
-and is not the wire format of the GBA reference. It must not be presented as
-working link support or used to truncate 16/32-bit SIO data.
+The earlier `LinkCableProtocol` byte codec is not wired to any core.

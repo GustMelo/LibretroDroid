@@ -15,6 +15,8 @@ copyright notices are preserved. This is an independent fork, not an official re
 - `player`: iOS Kotlin library with the native runtime embedded in its cinterop KLIB.
 - `netplay`: KMP protocol, session, LAN discovery and sockets (Android/iOS).
 - `native/cores`: independently pinned cores and their patches, optional for consumers.
+- Link Cable (GB/GBC/GBA between two devices on a LAN, Android and iOS): see
+  [docs/link-cable-architecture.md](docs/link-cable-architecture.md).
 
 Supported builds: Android arm64-v8a; iOS arm64 device and arm64 simulator.
 
