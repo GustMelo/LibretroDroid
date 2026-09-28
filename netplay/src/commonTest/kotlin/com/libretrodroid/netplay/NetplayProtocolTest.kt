@@ -5,6 +5,7 @@ import okio.ByteString.Companion.encodeUtf8
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class NetplayProtocolTest {
 
@@ -18,6 +19,32 @@ class NetplayProtocolTest {
             Datagram.Performance(3, 600, -1L, 240),
             Datagram.Hello(token = 0x7FFF_1234),
         ).forEach { assertEquals(it, Datagram.decode(Datagram.encode(it))) }
+    }
+
+    @Test
+    fun linkCablePacketsRoundTrip() {
+        listOf<LinkCableProtocol.Packet>(
+            LinkCableProtocol.Packet.Hello("pokemon-ruby|mgba", system = 3, players = 4),
+            LinkCableProtocol.Packet.Transfer(sequence = 17, cycle = 123_456L, value = 0xA5),
+            LinkCableProtocol.Packet.TransferReply(sequence = 17, value = 0x5A),
+            LinkCableProtocol.Packet.Reset(sequence = 18),
+            LinkCableProtocol.Packet.Bye,
+        ).forEach { assertEquals(it, LinkCableProtocol.decode(LinkCableProtocol.encode(it))) }
+    }
+
+    @Test
+    fun linkCableRejectsMalformedPackets() {
+        assertNull(LinkCableProtocol.decode(byteArrayOf()))
+        assertNull(LinkCableProtocol.decode(byteArrayOf(99)))
+        assertNull(LinkCableProtocol.decode(byteArrayOf(1, 99, 3, 2, 0)))
+        assertNull(LinkCableProtocol.decode(byteArrayOf(2, 1, 0)))
+    }
+
+    @Test
+    fun linkCablePacketsStayWithinHotPathBudget() {
+        val packet = LinkCableProtocol.encode(LinkCableProtocol.Packet.Transfer(1, 2L, 3))
+        assertEquals(14, packet.size)
+        assertTrue(packet.size <= LinkCableProtocol.MAX_PACKET)
     }
 
     @Test
