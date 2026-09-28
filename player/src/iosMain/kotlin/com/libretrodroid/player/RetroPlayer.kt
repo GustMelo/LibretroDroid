@@ -497,6 +497,22 @@ private class GameView : UIView(frame = CGRectZero.readValue()) {
 
     override fun layoutSubviews() {
         super.layoutSubviews()
+        measure()
+    }
+
+    /**
+     * A plain UIView reports contentScaleFactor 1 until it is in a window. Laid out before that, the drawable was
+     * measured in points, so the game rendered at half resolution in a corner, and no later layout fixed it because
+     * the point size never changed. Adopt the screen's scale on entering a window and measure again.
+     */
+    override fun didMoveToWindow() {
+        super.didMoveToWindow()
+        val scale = traitCollection.displayScale
+        if (window != null && scale > 0.0 && scale != contentScaleFactor) contentScaleFactor = scale
+        measure()
+    }
+
+    private fun measure() {
         val scale = contentScaleFactor
         val size = bounds.useContents { (size.width * scale).toInt() to (size.height * scale).toInt() }
         if (size != pixelSize) {
