@@ -54,7 +54,7 @@ build_android() { # core, src, key, build, jni
       -DCMAKE_TOOLCHAIN_FILE="$(ndk_dir)/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a \
       -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release ${4#cmake:}
     "$(cmake_bin)/ninja" -C "$build" -j "$JOBS"
-    # A fork may keep its upstream library name (mgba_link builds mgba_libretro).
+    # A fork may keep its upstream library name.
     cp "$(find "$build" -name "*_libretro*.so" | head -1)" "$target"
     "$(ls "$(ndk_dir)"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)" --strip-unneeded "$target"
   else

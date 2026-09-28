@@ -1,33 +1,76 @@
 # Link Cable
 
-Two devices on the same LAN run their own copy of the game and connect their
-emulated link ports. No video or audio crosses the network. Android and iOS
-use the same cores from the same pinned commits, so they pair with each other.
+Players connect their emulated link ports: on one device, between devices on a
+LAN, Android and iOS alike. No video or audio crosses the network. Android and
+iOS use the same cores from the same pinned commits, so they pair with each other.
 
-| System | Core | Link data path |
+| System | Core | How the cable works |
 | --- | --- | --- |
-| GB / GBC | `gambatte` (libretro/gambatte-libretro, patched) | Gambatte's serial socket, TCP port 56400 |
-| GBA | `mgba_link` (Aelvryx/mgba-wifi-link) | Libretro Netpacket over `NetpacketSession` |
-| Game Gear | `genesis_plus_gx_link` (libretro/Genesis-Plus-GX, patched) | Libretro Netpacket over `NetpacketSession` |
+| GB / GBC | `mgba` (retrolink patch) | 2 consoles linked inside the core; netplay carries only input |
+| GBA | `mgba` (retrolink patch) | up to 4 consoles (Multi-Pak) linked inside the core; netplay carries only input |
+| Game Gear | `genesis_plus_gx_link` (patched) | one console per device, Libretro Netpacket over `NetpacketSession` |
 
-These are separate cores from the regular `mgba` and `genesis_plus_gx`: an app
-loads them only for a link session, so ordinary save states and play are
-unaffected.
+## GB, GBC and GBA: retrolink
 
-## Pairing (KMP, shared)
+The `mgba` patch (`native/cores/patches/mgba`, file `retrolink.inl`) lets the
+regular mGBA core run several consoles at once, linked by a cable inside the
+core. Console 0 is the game the frontend loaded; consoles 1-3 are clones of the
+same ROM (and GBA BIOS) with their own save RAM. Controller port p drives
+console p. Every console runs on the emulation thread, in a fixed order:
+
+- GBA: mGBA's own lockstep coordinator (`GBASIOLockstepCoordinator`), the one
+  its desktop frontend uses for Multi-Pak, with cooperative sleep/wake instead
+  of threads (as Aelvryx/mgba-wifi-link's replicated pair does). Up to 4.
+- GB/GBC: a pair driver. When a console starts a transfer on its own clock it
+  receives its partner's SB; the partner, waiting on the external clock,
+  receives the starter's SB and completes after the same bit time.
+
+The same inputs therefore give the same result on every device, and the
+regular netplay (`NetplaySession`: LAN discovery, input sync, state hashes)
+turns this into a link session. Only controller input crosses the network: a
+serial transfer never waits for the network, whatever the latency, so the
+feel is that of netplay (input delay), not of a cable round trip.
+
+Frontend API (optional symbols; cores without them report 1 player):
+
+| Core export | Meaning |
+| --- | --- |
+| `retro_link_max_players()` | 4 for GBA, 2 for GB/GBC |
+| `retro_link_set_players(n)` | n linked consoles; those that stay keep running, new ones boot with their save |
+| `retro_link_set_local(p)` | this device plays console p: its picture, its sound and `RETRO_MEMORY_SAVE_RAM` |
+| `retro_link_set_grid(on)` | every console on one screen (side by side, 2x2 for 3-4), for players sharing a device |
+| `retro_link_load_save(p, data, size)` | console p gets its player's save and boots again with it |
+| `retro_link_keep(p)` | console p goes on alone as console 0 (state and save) |
+
+A state (`retro_serialize`) holds every console with its save. Loading one
+rebuilds the cable, which is not part of a console's state; the netplay host
+loads its own state before sending it, so every device starts the cable from
+the same point and stays byte-identical.
+
+Netplay (protocol 8): the joiner's `Hello` carries its save; the host gives it
+a console with that save (`NetplayEmulator.linkConsoles`). When a player leaves
+and ports move, every console but the host's boots again with its player's
+current save, so nothing saved in the session is lost. Clients keep their own
+save RAM (no shared save swap), and when the session ends a client keeps only
+the console it played (`linkKeepLocal`). Android's `GLRetroView` and iOS's
+`RetroPlayer` implement these hooks; `setLocalLinkPlayers(n)` is the
+same-device mode, where each physical controller plays its own port.
+
+`scripts/test-retrolink.sh` builds the patched core for macOS and runs 2 Game
+Boys with a generated serial ROM (`make_gb_link_rom.py`) and 2, 3 and 4 GBAs
+with a generated Multi-Pak ROM (`gba_link4.c`, built by clang alone): every
+console must exchange its words correctly, and a second core instance that
+joined from the first's state must stay byte-identical. The release script
+runs it.
+
+## Pairing for the Game Gear (KMP, shared)
 
 `LinkLobby` advertises on the existing `_libretrodroid._tcp` service with the
 game key `link|<rom>|<core>|<core version>`. Of two devices with the same key,
 the one that started later connects to the earlier one, so exactly one TCP
 connection exists. The hello checks the key again; a mismatch is rejected
-before any core sees data. The earlier device is `localId` 0 (host).
-
-- GB/GBC: the host sets `gambatte_gb_link_mode=Network Server`, the joiner
-  `Network Client` with the host's IPv4 address in the twelve
-  `gambatte_gb_link_network_server_ip_N` digits. The pairing connection stays
-  open as `LinkControl`, a one-second heartbeat that reports a vanished peer.
-- GBA and Game Gear: the pairing connection becomes the `NetpacketSession`
-  transport; the host is Netpacket client 0 and reports client 1 as connected.
+before any core sees data. The earlier device is `localId` 0 (host). The
+pairing connection becomes the `NetpacketSession` transport.
 
 ## Threading and lifetime
 
@@ -37,19 +80,9 @@ direction); `pump()` delivers them before each frame. `closeNetwork()` never
 calls the core. Pausing the player, backgrounding it or destroying it stops the
 session before the core is unloaded.
 
-The Gambatte patch keeps a silent peer from freezing emulation: TCP_NODELAY,
-two-second send/receive timeouts, a one-second connect timeout, exact two-byte
-reads, SO_REUSEADDR and a monotonic reconnect throttle.
-A second patch fixes upstream Gambatte's received-bit shifting when a game
-reads SB/SC in the middle of a network transfer (polling instead of the serial
-interrupt): it took the byte's top bits again and corrupted it.
-`scripts/test-gb-link.sh` runs two patched cores on the Mac, linked over
-127.0.0.1, with a generated serial test ROM; each must receive its partner's
-bytes intact. The release script runs it.
-
-While a link is active the players refuse save states, state loads, reset,
-fast-forward and controller netplay: each would desynchronize the two sides.
-Battery saves stay per player.
+While a Netpacket link is active the players refuse save states, state loads,
+reset, fast-forward and controller netplay: each would desynchronize the two
+sides. Battery saves stay per player.
 
 ## Game Gear (Gear-to-Gear)
 
@@ -85,23 +118,12 @@ partner that joins late and one that leaves. The release script runs it.
 On a device the same ROM shows red, then green once the serial exchange is
 complete.
 
-## GBA reference
-
-Aelvryx/mgba-wifi-link at 9e919b0cfbb93af7d1171570dfc6745d00eeebab replicates
-both machines on each device and synchronizes inputs, so serial words need no
-network round trip. Its documented scope is two-player Multi-Pak: Mario Kart:
-Super Circuit, Zelda: Four Swords and Advance Wars were qualified upstream.
-Single-Pak multiboot, the Wireless Adapter and four-player sessions are not
-supported.
-
 ## Limits
 
-- Two players per link session.
-- Same LAN only; no internet relay.
+- GB/GBC link is two players (the DMG-07 four-player adapter is not emulated);
+  GBA Multi-Pak up to four.
+- Single-Pak multiboot and the GBA Wireless Adapter are not emulated yet.
 - Game Gear link adds 50 ms of cable latency; games that expect an answer
   within a few scanlines of a byte would time out.
-- GB/GBC link is a byte-for-byte serial exchange with a network round trip per
-  master transfer: trades and battles work; timing-critical real-time link
-  games may stutter on slow Wi-Fi.
 
 The earlier `LinkCableProtocol` byte codec is not wired to any core.
