@@ -165,9 +165,11 @@ bool LibretroDroid::unserializeSRAM(int8_t* data, size_t size) {
         return false;
     }
 
+    // Like RetroArch, load the prefix of a longer file: another core may append a footer to the
+    // same cartridge RAM (mGBA stores the MBC3 clock after it; Gambatte keeps it apart).
     if (size > sramSize) {
-        LOGE("Cannot load SRAM: size mismatch");
-        return false;
+        LOGE("SRAM file is %zu bytes longer than the core's; loading its first %zu", size - sramSize, sramSize);
+        size = sramSize;
     }
 
     memcpy(sramState, data, size);
