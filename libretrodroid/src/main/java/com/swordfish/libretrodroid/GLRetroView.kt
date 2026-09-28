@@ -17,6 +17,8 @@
 
 package com.swordfish.libretrodroid
 
+import com.libretrodroid.netplay.NetpacketSession
+import com.libretrodroid.netplay.TcpConnection
 import com.libretrodroid.netplay.HostStart
 import com.libretrodroid.netplay.NetplayEmulator
 import com.libretrodroid.netplay.NetplayListener
@@ -54,12 +56,33 @@ class GLRetroView(
     private val data: GLRetroViewData,
 ) : GLSurfaceView(context), LifecycleObserver {
 
+    @Volatile private var linkSession: NetpacketSession? = null
+    val isLinkActive: Boolean get() = linkSession != null
+
+    /** Connection must already have completed compatibility negotiation. */
+    fun startLink(connection: TcpConnection, localId: Int): Boolean =
+        runOnEmulationThread(true) {
+            check(linkSession == null && isEmulationReady)
+            stopNetplay()
+            frameSpeed = 1
+            val session = NetpacketSession(connection, AndroidNetpacketCore(), localId)
+            if (session.start()) { linkSession = session; true } else false
+        }
+
+    fun stopLink() = runOnEmulationThread(true) { stopLinkOnEmulationThread() }
+
+    private fun stopLinkOnEmulationThread() {
+        linkSession?.stopOnEmulationThread()
+        linkSession = null
+    }
+
     var audioEnabled: Boolean by Delegates.observable(true) { _, _, value ->
         LibretroDroid.setAudioEnabled(value)
     }
 
-    var frameSpeed: Int by Delegates.observable(1) { _, _, value ->
-        LibretroDroid.setFrameSpeed(value)
+    var frameSpeed: Int by Delegates.vetoable(1) { _, _, value ->
+        if (isLinkActive && value != 1) false
+        else { LibretroDroid.setFrameSpeed(value); true }
     }
 
     var shader: ShaderConfig by Delegates.observable(data.shader) { _, _, value ->
@@ -125,6 +148,8 @@ class GLRetroView(
 
     @OnLifecycleEvent(Lifecycle.Event.ON_DESTROY)
     fun onDestroy() = catchExceptions {
+        linkSession?.closeNetwork()
+        linkSession = null
         streamSink = null
         LibretroDroid.setStreamAudio(false)
         LibretroDroid.destroy()
@@ -175,6 +200,7 @@ class GLRetroView(
 
     fun serializeState(useEmulationThread: Boolean = true): ByteArray {
         return runOnEmulationThread(useEmulationThread) {
+            check(!isLinkActive) { "Disconnect link before saving state" }
             LibretroDroid.serializeState()
         }
     }
@@ -187,6 +213,7 @@ class GLRetroView(
 
     fun unserializeState(data: ByteArray, useEmulationThread: Boolean = true): Boolean {
         return runOnEmulationThread(useEmulationThread) {
+            if (isLinkActive) return@runOnEmulationThread false
             LibretroDroid.unserializeState(data)
         }
     }
@@ -199,11 +226,13 @@ class GLRetroView(
 
     fun unserializeSRAM(data: ByteArray, useEmulationThread: Boolean = true): Boolean {
         return runOnEmulationThread(useEmulationThread) {
+            if (isLinkActive) return@runOnEmulationThread false
             LibretroDroid.unserializeSRAM(data)
         }
     }
 
     fun reset(useEmulationThread: Boolean = true) = runOnEmulationThread(useEmulationThread) {
+        check(!isLinkActive) { "Disconnect link before reset" }
         LibretroDroid.reset()
     }
 
@@ -242,6 +271,7 @@ class GLRetroView(
 
     fun startNetplayAsHost(players: Int, inputDelay: Int, rollback: Boolean, hashInterval: Int = DEFAULT_HASH_INTERVAL): HostStart =
         runOnEmulationThread(true) {
+            check(!isLinkActive) { "Link and controller netplay are mutually exclusive" }
             LibretroDroid.startNetplay(0, players, inputDelay, hashInterval, rollback)
             HostStart(LibretroDroid.serializeState(), LibretroDroid.serializeSRAM().takeIf { it.isNotEmpty() })
         }
@@ -258,6 +288,7 @@ class GLRetroView(
         hashInterval: Int = DEFAULT_HASH_INTERVAL,
     ): Boolean =
         runOnEmulationThread(true) {
+            check(!isLinkActive) { "Link and controller netplay are mutually exclusive" }
             if (saveRam != null) {
                 if (ownSaveRam == null) ownSaveRam = LibretroDroid.serializeSRAM()
                 LibretroDroid.unserializeSRAM(saveRam)
@@ -444,6 +475,7 @@ class GLRetroView(
 
         @OnLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         private fun pause() = catchExceptions {
+            if (linkSession != null) stopLink()
             isEmulationReady = false
             onPause()
             LibretroDroid.pause()
@@ -456,6 +488,10 @@ class GLRetroView(
                 redrawOnly = false
                 LibretroDroid.redraw()
             } else if (isEmulationReady) {
+                linkSession?.let {
+                    it.pump()
+                    if (it.endReason != null) linkSession = null
+                }
                 LibretroDroid.step(this@GLRetroView)
                 streamFrame()
                 lifecycle?.coroutineScope?.launch {
@@ -534,14 +570,13 @@ class GLRetroView(
         }
 
         val latch = CountDownLatch(1)
-        var result: T? = null
+        var result: Result<T>? = null
         queueEvent {
-            result = block()
-            latch.countDown()
+            try { result = runCatching(block) } finally { latch.countDown() }
         }
 
         latch.awaitUninterruptibly()
-        return result!!
+        return result!!.getOrThrow()
     }
 
     private fun buildShader(config: ShaderConfig): GLRetroShader {

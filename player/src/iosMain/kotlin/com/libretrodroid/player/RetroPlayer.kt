@@ -1,5 +1,7 @@
 package com.libretrodroid.player
 
+import com.libretrodroid.netplay.NetpacketSession
+import com.libretrodroid.netplay.TcpConnection
 import com.libretrodroid.engine.native.RE_NETPLAY_LOCAL_INPUT
 import com.libretrodroid.engine.native.RE_NETPLAY_STATE_HASH
 import com.libretrodroid.engine.native.RE_SHADER_SHARP
@@ -216,8 +218,27 @@ class RetroPlayer(
         re_stream_stop()
     }
 
+    @Volatile private var linkSession: NetpacketSession? = null
+    val isLinkActive: Boolean get() = linkSession != null
+
+    /** Connection must already have completed compatibility negotiation. */
+    fun startLink(connection: TcpConnection, localId: Int): Boolean = onRenderThread {
+        check(linkSession == null && running && !paused)
+        stop()
+        val session = NetpacketSession(connection, IosNetpacketCore(), localId)
+        if (session.start()) { linkSession = session; true } else false
+    }
+
+    fun stopLink() = onRenderThread { stopLinkOnRenderThread() }
+
+    private fun stopLinkOnRenderThread() {
+        linkSession?.stopOnEmulationThread()
+        linkSession = null
+    }
+
     fun setPaused(paused: Boolean) = onRenderThread {
         if (paused == this.paused) return@onRenderThread
+        if (paused) stopLinkOnRenderThread()
         this.paused = paused
         if (paused) re_pause() else re_resume()
     }
@@ -243,7 +264,7 @@ class RetroPlayer(
         return sramOnExit
     }
 
-    override fun reset() = onRenderThread { re_reset() }
+    override fun reset() = onRenderThread { check(!isLinkActive); re_reset() }
 
     fun setWidescreen(enabled: Boolean) = setAspectRatio(if (enabled) AspectRatio.FILL else AspectRatio.CORE)
 
@@ -272,9 +293,9 @@ class RetroPlayer(
 
     fun serializeSram(): ByteArray? = onRenderThread { takeBytes { re_serialize_sram(it) } }
 
-    fun serializeState(): ByteArray? = onRenderThread { takeBytes { re_serialize(it) } }
+    fun serializeState(): ByteArray? = onRenderThread { check(!isLinkActive); takeBytes { re_serialize(it) } }
 
-    fun unserializeState(state: ByteArray): Boolean = onRenderThread { state.load { data, size -> re_unserialize(data, size) } }
+    fun unserializeState(state: ByteArray): Boolean = onRenderThread { if (isLinkActive) return@onRenderThread false; state.load { data, size -> re_unserialize(data, size) } }
 
     override val minInputDelay: Int get() = game.netplayMinDelay
 
@@ -282,6 +303,7 @@ class RetroPlayer(
 
     override fun startAsHost(players: Int, inputDelay: Int): HostStart = onRenderThread {
 
+        check(!isLinkActive)
         re_netplay_start(0, players, inputDelay, HASH_INTERVAL, rollback)
         HostStart(
             state = takeBytes { re_serialize(it) } ?: ByteArray(0),
@@ -291,6 +313,7 @@ class RetroPlayer(
 
     override fun startAsClient(port: Int, players: Int, inputDelay: Int, state: ByteArray, saveRam: ByteArray?): Boolean = onRenderThread {
 
+        check(!isLinkActive)
         if (saveRam != null) {
             if (ownSaveRam == null) ownSaveRam = takeBytes { re_serialize_sram(it) }
             saveRam.load { data, size -> re_unserialize_sram(data, size) }
@@ -340,6 +363,7 @@ class RetroPlayer(
         } finally {
             link?.invalidate()
             runPendingTasks()
+            stopLinkOnRenderThread()
             stopStreamOnRenderThread()
             sramOnExit = takeBytes { re_serialize_sram(it) }
             re_destroy()
@@ -389,6 +413,10 @@ class RetroPlayer(
                 re_set_motion(port.toUInt(), SOURCE_LEFT, axis(axes, 0), axis(axes, 1))
                 re_set_motion(port.toUInt(), SOURCE_RIGHT, axis(axes, 2), axis(axes, 3))
             }
+        }
+        linkSession?.let {
+            it.pump()
+            if (it.endReason != null) linkSession = null
         }
         re_frame(outgoing, self)
         if (sink != null) streamSize.let { (w, h) ->
