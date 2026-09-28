@@ -21,13 +21,15 @@ class NetplaySession(
     private val maxPlayers: Int = NetplayProtocol.MAX_PLAYERS,
 
     private val debugDelay: Int? = null,
+    /** The LAN by default; a [MessageNetwork] plays across the internet. */
+    private val network: NetplayNetwork = LanNetwork(),
     private val onStatus: (NetplayStatus) -> Unit,
 ) : NetplayListener, Closeable {
 
     private enum class Role { NONE, HOST, CLIENT }
 
     private class Peer(
-        val connection: TcpConnection,
+        val connection: StreamConnection,
         val name: String,
         @Volatile var datagramAddress: SocketAddress,
         @Volatile var rttMillis: Double,
@@ -45,7 +47,7 @@ class NetplaySession(
         @Volatile var timingSequence = 0
     }
 
-    private val udp = UdpSocket.bind(UDP_PORT)
+    private val udp = network.datagrams
 
     @Volatile private var closed = false
     @Volatile private var role = Role.NONE
@@ -60,7 +62,7 @@ class NetplaySession(
     private val roster = SynchronizedObject()
     @Volatile private var lastInputSentAt = 0L
     @Volatile private var hostPeer: Peer? = null
-    @Volatile private var server: TcpServer? = null
+    @Volatile private var server: StreamServer? = null
 
     private val clients = atomic(emptyList<Peer>())
 
@@ -96,7 +98,7 @@ class NetplaySession(
     }
 
     fun host(): Int {
-        val socket = TcpServer.bind(TCP_PORT)
+        val socket = network.listen()
         server = socket
         startThread("netplay-accept") {
             while (!closed) {
@@ -107,7 +109,7 @@ class NetplaySession(
         return socket.localPort
     }
 
-    private fun serveClient(connection: TcpConnection) {
+    private fun serveClient(connection: StreamConnection) {
         var peer: Peer? = null
         try {
             val hello = ControlMessage.read(connection.source) as? ControlMessage.Hello ?: return
@@ -255,7 +257,7 @@ class NetplaySession(
 
     fun join(game: LanGame) = startThread("netplay-join") {
         try {
-            val connection = TcpConnection.connect(game.address, timeoutMillis = 3_000)
+            val connection = network.connect(game.address, timeoutMillis = 3_000)
             val linkSave = if (emulator.linkMaxPlayers > 1) emulator.linkLocalSave()?.toByteString() else null
             connection.sink.write(ControlMessage.encode(ControlMessage.Hello(
                 NetplayProtocol.VERSION, gameKey, deviceName, udp.localPort, emulator.canRecompile, linkSave ?: ByteString.EMPTY,
@@ -551,10 +553,11 @@ class NetplaySession(
         }
         runCatching { server?.close() }
         runCatching { udp.close() }
+        runCatching { network.close() }
         if (role != Role.NONE) emulator.stop()
     }
 
-    private companion object {
+    internal companion object {
         const val TCP_PORT = 53318
         const val UDP_PORT = 53319
         const val HASH_MEMORY = 1_200
