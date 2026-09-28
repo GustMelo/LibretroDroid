@@ -166,10 +166,10 @@ index abed4cc7c..e50b8f4f8 100644
  			break;
 diff --git a/src/platform/libretro/retrolink.inl b/src/platform/libretro/retrolink.inl
 new file mode 100644
-index 000000000..a7a1c77c0
+index 000000000..af2971b3e
 --- /dev/null
 +++ b/src/platform/libretro/retrolink.inl
-@@ -0,0 +1,666 @@
+@@ -0,0 +1,713 @@
 +/* retrolink: several consoles linked by an emulated cable inside one libretro core.
 + *
 + * Console 0 is the core the frontend loaded; consoles 1..N-1 are clones of the same ROM (and GBA BIOS)
@@ -347,6 +347,19 @@ index 000000000..a7a1c77c0
 +	memset(rl.users, 0, sizeof(rl.users));
 +}
 +
++#ifdef M_CORE_GBA
++/* The serial mode, SI and player ID of SIOCNT are only worked out when the mode changes: a console that
++ * played port 1 and now plays port 0 (or a state loaded under another cable) would keep its old ID. */
++static void _rlRefreshSerial(struct GBA* gba) {
++	struct GBASIO* sio = &gba->sio;
++	uint16_t siocnt = sio->siocnt & ~0x00FC; /* SI, SD, ID, error and start come from the new cable */
++	sio->siocnt &= ~0x00FC;
++	sio->mode = (enum GBASIOMode) -1;
++	GBASIOWriteRCNT(sio, sio->rcnt);
++	GBASIOWriteSIOCNT(sio, siocnt);
++}
++#endif
++
 +/* A fresh cable for every console present: also the canonical state after loading a link state. */
 +static void _rlAttachLink(void) {
 +	_rlDetachLink();
@@ -366,6 +379,38 @@ index 000000000..a7a1c77c0
 +			GBASIOLockstepDriverCreate(&rl.drivers[i], &rl.users[i].d);
 +			GBASIOLockstepCoordinatorAttach(&rl.coordinator, &rl.drivers[i]);
 +			rl.cores[i]->setPeripheral(rl.cores[i], mPERIPH_GBA_LINK_PORT, &rl.drivers[i].d);
++		}
++		for (i = 0; i < rl.count; ++i) {
++			_rlRefreshSerial(rl.cores[i]->board);
++		}
++		/* Every console's view of the others' modes, and so SD ("everyone ready"), would otherwise wait for the
++		 * attach and mode events of this rebuild, delivered in an order that depends on how far apart the consoles
++		 * are (a late attach event even forgets a mode). They only say what is set here, the same on every device. */
++		_rlDrainQueues();
++		struct GBASIOLockstepPlayer* players[RL_MAX];
++		for (i = 0; i < rl.count; ++i) {
++			players[i] = TableLookup(&rl.coordinator.players, rl.drivers[i].lockstepId);
++		}
++		for (i = 0; i < rl.count; ++i) {
++			if (!players[i]) {
++				continue;
++			}
++			struct GBASIO* sio = &((struct GBA*) rl.cores[i]->board)->sio;
++			players[i]->mode = sio->mode;
++			bool ready = true;
++			unsigned j;
++			for (j = 0; j < rl.count; ++j) {
++				if (!players[j]) {
++					continue;
++				}
++				enum GBASIOMode other = ((struct GBA*) rl.cores[j]->board)->sio.mode;
++				players[i]->otherModes[players[j]->playerId] = other;
++				ready = ready && other == sio->mode;
++			}
++			if (sio->mode == GBA_SIO_MULTI) {
++				sio->siocnt = GBASIOMultiplayerSetReady(sio->siocnt, ready);
++				sio->rcnt = GBASIORegisterRCNTSetSd(sio->rcnt, ready);
++			}
 +		}
 +#endif
 +	} else {
@@ -813,20 +858,22 @@ index 000000000..a7a1c77c0
 +	}
 +	cursor += 8;
 +	size -= 8;
++	/* Each console's state holds its cable driver's too, which would load into whatever cable is attached here
++	 * (the host's running one, a joiner's new one) and leave traces in the console. Unplugged, they all load the
++	 * same way everywhere. */
++	_rlDetachLink();
 +	unsigned i;
 +	for (i = 0; i < count; ++i) {
 +		uint32_t length;
-+		if (size < 4) {
-+			return false;
-+		}
-+		LOAD_32LE(length, 0, cursor);
-+		if (size - 4 < length) {
++		if (size < 4 || (LOAD_32LE(length, 0, cursor), size - 4 < length)) {
++			_rlAttachLink();
 +			return false;
 +		}
 +		struct VFile* vfm = VFileFromConstMemory(cursor + 4, length);
 +		bool loaded = mCoreLoadStateNamed(rl.cores[i], vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
 +		vfm->close(vfm);
 +		if (!loaded) {
++			_rlAttachLink();
 +			return false;
 +		}
 +		cursor += 4 + length;

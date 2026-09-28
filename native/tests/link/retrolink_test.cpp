@@ -97,6 +97,17 @@ int main(int argc, char** argv) {
         fails = 1;
     }
     frames(b, 30, 3);
+    // B, which played the last port, now hosts: its console 0 must take player ID 0 and link again.
+    if (gba && !strcmp(argv[5], "gba4")) {
+        uint32_t good0 = rd32(b, 0, 8), bad0 = rd32(b, 0, 12);
+        cur = &b; b.setPlayers(players);
+        auto canonical = state(b); cur = &b; b.unser(canonical.data(), canonical.size());
+        frames(b, 600, 11);
+        uint32_t id = rd32(b, 0, 4), good = rd32(b, 0, 8) - good0, bad = rd32(b, 0, 12) - bad0;
+        printf("  rehosted console 0: id=%u good=%u bad=%u\n", id, good, bad);
+        // Like replugging a real cable, a word in flight when the cable changes may be lost: at most one.
+        if (id != 0 || good < 20 || bad > 1) fails = 1;
+    }
     printf(fails ? "FAIL\n" : "PASS\n");
     return fails;
 }

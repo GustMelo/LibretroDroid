@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 source = Path(__file__).with_name('gba_link4.c')
+LOGO = '24ffae51699aa2213d84820a84e409ad11248b98c0817f21a352be199309ce2010464a4af82731ec58c7e83382e3cebf85f4df94ce4b09c194568ac01372a7fc9f844d73a3ca9a615897a327fc039876231dc7610304ae56bf38840040a70efdff52fe036f9530f197fbc08560d68025a963be03014e38e2f9a234ffbb3e0344780090cb88113a9465c07c6387f03cafd625e48b380aac7221d4f807'
 with tempfile.TemporaryDirectory() as work:
     obj = Path(work) / 'link4.o'
     subprocess.check_call(['clang', '--target=armv4t-none-eabi', '-marm', '-O2', '-ffreestanding', '-fno-builtin',
@@ -27,7 +28,7 @@ for section in sections:
         text = elf[section[4]:section[4] + section[5]]
 rom = bytearray(b'\xff' * 32768)
 rom[0:4] = struct.pack('<I', 0xEA000000 | ((0xC0 - 8) // 4))  # b 0x080000C0
-rom[4:0xA0] = bytes(0x9C)
+rom[4:0xA0] = bytes.fromhex(LOGO)  # the header logo frontends and BIOS check
 rom[0xA0:0xB2] = b'LINKTEST4P\0\0LTP400'
 rom[0xB2] = 0x96
 rom[0xB3:0xBD] = bytes(10)

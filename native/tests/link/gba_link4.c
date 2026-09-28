@@ -1,5 +1,6 @@
 /* GBA Multi-Pak test for 2-4 linked consoles (CC0). The parent sends 0x1000+n; each child sends 0xC000+id.
- * Results at 0x02000000: magic, id, good, bad, children present, last SIOMULTI0..3. Built by make_gba_link4_rom.py. */
+ * Results at 0x02000000: magic, id, good, bad, children present, last SIOMULTI0..3. On screen: green once more
+ * than 20 words went through and none was wrong, red after a wrong one, black before. Built by make_gba_link4_rom.py. */
 typedef unsigned short u16;
 typedef unsigned int u32;
 #define REG16(a) (*(volatile u16*)(a))
@@ -8,11 +9,15 @@ typedef unsigned int u32;
 #define SIOSEND REG16(0x0400012A)
 #define RCNT REG16(0x04000134)
 #define RESULT ((volatile u32*)0x02000000)
+#define DISPCNT REG16(0x04000000)
+#define BACKDROP REG16(0x05000000)
 #define MAGIC 0x3450544C /* "LTP4" */
 
 __attribute__((noreturn)) void start(void) {
 	RESULT[0] = MAGIC;
 	for (int i = 1; i < 12; ++i) RESULT[i] = 0;
+	DISPCNT = 0; /* mode 0, no layers: the whole screen is the backdrop colour */
+	BACKDROP = 0;
 	RCNT = 0;
 	SIOCNT = 0x2000; /* MULTI, 9600 bps */
 	u32 n = 0;
@@ -47,5 +52,7 @@ __attribute__((noreturn)) void start(void) {
 			}
 		}
 		for (u32 i = 0; i < 4; ++i) RESULT[5 + i] = SIOMULTI(i);
+		if (RESULT[3]) BACKDROP = 0x001F;
+		else if (RESULT[2] > 20) BACKDROP = 0x03E0;
 	}
 }
