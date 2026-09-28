@@ -52,7 +52,8 @@ build_android() { # core, src, key, build, jni
       -DCMAKE_TOOLCHAIN_FILE="$(ndk_dir)/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a \
       -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release ${4#cmake:}
     "$(cmake_bin)/ninja" -C "$build" -j "$JOBS"
-    cp "$(find "$build" -name "$1_libretro*.so" | head -1)" "$target"
+    # A fork may keep its upstream library name (mgba_link builds mgba_libretro).
+    cp "$(find "$build" -name "*_libretro*.so" | head -1)" "$target"
     "$(ls "$(ndk_dir)"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)" --strip-unneeded "$target"
   else
     rm -rf "$WORK/libs/$1" "$WORK/obj/$1"
@@ -77,7 +78,7 @@ build_ios_slice() { # core, src, build, extra, sdk(iphoneos|iphonesimulator)
       -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
       -DCMAKE_OSX_SYSROOT="$sdk_path" -DCMAKE_BUILD_TYPE=Release ${3#cmake:}
     "$(cmake_bin)/ninja" -C "$build" -j "$JOBS"
-    dylib="$(find "$build" -name "$1_libretro*.dylib" | head -1)"
+    dylib="$(find "$build" -name "*_libretro*.dylib" | head -1)"
   else
     local dir="$2/$(dirname "$3")" makefile
     makefile="$(basename "$3")"

@@ -231,6 +231,12 @@ class RetroPlayer(
 
     fun stopLink() = onRenderThread { stopLinkOnRenderThread() }
 
+    /** Called once from the render thread with the reason when a running link session ends by itself. */
+    var onLinkEnded: ((String) -> Unit)? = null
+
+    /** Changes a core option while running; the core applies it on its next frame. */
+    fun setVariable(key: String, value: String) = onRenderThread { re_set_variable(key, value) }
+
     private fun stopLinkOnRenderThread() {
         linkSession?.stopOnEmulationThread()
         linkSession = null
@@ -416,7 +422,10 @@ class RetroPlayer(
         }
         linkSession?.let {
             it.pump()
-            if (it.endReason != null) linkSession = null
+            it.endReason?.let { reason ->
+                linkSession = null
+                onLinkEnded?.invoke(reason)
+            }
         }
         re_frame(outgoing, self)
         if (sink != null) streamSize.let { (w, h) ->

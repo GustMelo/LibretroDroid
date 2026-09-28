@@ -15,3 +15,6 @@ fun iosLanMultiplayer(
     discovery = BonjourDiscovery(),
     onStatus = onStatus,
 )
+
+fun iosLinkLobby(linkKey: String, onPaired: (LinkPeer) -> Unit): LinkLobby =
+    LinkLobby(linkKey, UIDevice.currentDevice.name, BonjourDiscovery(), onPaired)

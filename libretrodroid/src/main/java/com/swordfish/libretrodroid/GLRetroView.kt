@@ -71,6 +71,14 @@ class GLRetroView(
 
     fun stopLink() = runOnEmulationThread(true) { stopLinkOnEmulationThread() }
 
+    /** Called once from the emulation thread with the reason when a running link session ends by itself. */
+    var onLinkEnded: ((String) -> Unit)? = null
+
+    /** Changes core options from the emulation thread; blocks until applied, so call it off the UI thread. */
+    fun setVariables(vararg variables: Variable) = runOnEmulationThread(true) {
+        variables.forEach { LibretroDroid.updateVariable(it) }
+    }
+
     private fun stopLinkOnEmulationThread() {
         linkSession?.stopOnEmulationThread()
         linkSession = null
@@ -490,7 +498,10 @@ class GLRetroView(
             } else if (isEmulationReady) {
                 linkSession?.let {
                     it.pump()
-                    if (it.endReason != null) linkSession = null
+                    it.endReason?.let { reason ->
+                        linkSession = null
+                        onLinkEnded?.invoke(reason)
+                    }
                 }
                 LibretroDroid.step(this@GLRetroView)
                 streamFrame()

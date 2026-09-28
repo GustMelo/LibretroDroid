@@ -103,7 +103,7 @@ class NsdDiscovery(context: Context) : LanDiscovery {
     }
 
     private fun NsdServiceInfo.toLanGame(): LanGame? {
-        val address = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) hostAddresses.firstOrNull() else @Suppress("DEPRECATION") host)
+        val address = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) hostAddresses.sortedBy { if (it is java.net.Inet4Address) 0 else 1 }.firstOrNull() else @Suppress("DEPRECATION") host)
             ?: return null
         fun attr(key: String) = attributes[key]?.decodeToString()
         return LanGame(

@@ -28,7 +28,7 @@ fun LanMultiplayer(
     )
 }
 
-private fun deviceName(context: Context): String =
+internal fun deviceName(context: Context): String =
     Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
         ?.takeIf { it.isNotBlank() }
         ?: "${Build.MANUFACTURER} ${Build.MODEL}"
