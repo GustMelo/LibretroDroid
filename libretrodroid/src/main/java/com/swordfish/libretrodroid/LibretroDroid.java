@@ -157,6 +157,7 @@ public class LibretroDroid {
     public static native void linkSetLocal(int player);
     public static native void linkSetGrid(boolean grid);
     public static native boolean linkLoadSave(int player, byte[] save);
+    public static native boolean linkKeep(int player);
 
     public static native void updateVariable(Variable variable);
     public static native Variable[] getVariables();

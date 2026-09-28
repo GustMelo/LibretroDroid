@@ -14,6 +14,7 @@ struct Core {
     bool (*load)(const retro_game_info*); void (*run)(); void* (*mem)(unsigned); size_t (*ssize)();
     bool (*ser)(void*, size_t); bool (*unser)(const void*, size_t);
     bool (*setPlayers)(unsigned); void (*setLocal)(unsigned); bool (*loadSave)(unsigned, const void*, size_t);
+    bool (*keep)(unsigned);
 };
 static Core* cur;
 static void logf_(retro_log_level l, const char* f, ...) { if (l < RETRO_LOG_WARN) return; va_list a; va_start(a, f); vfprintf(stderr, f, a); va_end(a); }
@@ -36,7 +37,7 @@ static Core open(const char* lib, std::vector<unsigned char>& rom) {
     sym(c.h, a, "retro_set_audio_sample"); sym(c.h, ab, "retro_set_audio_sample_batch"); sym(c.h, ip, "retro_set_input_poll");
     sym(c.h, is, "retro_set_input_state"); sym(c.h, c.ssize, "retro_serialize_size"); sym(c.h, c.ser, "retro_serialize");
     sym(c.h, c.unser, "retro_unserialize"); sym(c.h, c.setPlayers, "retro_link_set_players"); sym(c.h, c.setLocal, "retro_link_set_local");
-    sym(c.h, c.loadSave, "retro_link_load_save");
+    sym(c.h, c.loadSave, "retro_link_load_save"); sym(c.h, c.keep, "retro_link_keep");
     se(env); vid([](const void*, unsigned, unsigned, size_t) {}); a([](int16_t, int16_t) {}); ab([](const int16_t*, size_t n) { return n; });
     ip([] {}); is([](unsigned port, unsigned dev, unsigned, unsigned id) -> int16_t {
         if (dev != RETRO_DEVICE_JOYPAD || port > 3) return 0;
@@ -88,6 +89,14 @@ int main(int argc, char** argv) {
             if (v < 16) fails = 1;
         }
     }
+    // The session ends on B: its last console goes on alone as console 0, RAM and all.
+    std::vector<char> before(64);
+    cur = &b; b.setLocal(players - 1); memcpy(before.data(), b.mem(RETRO_MEMORY_SYSTEM_RAM), before.size());
+    if (!b.keep(players - 1) || memcmp(before.data(), b.mem(RETRO_MEMORY_SYSTEM_RAM), before.size()) || b.ssize() >= sb.size()) {
+        printf("  keep: console %u did not become the only console\n", players - 1);
+        fails = 1;
+    }
+    frames(b, 30, 3);
     printf(fails ? "FAIL\n" : "PASS\n");
     return fails;
 }

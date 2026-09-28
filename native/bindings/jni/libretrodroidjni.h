@@ -29,6 +29,7 @@ JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkSe
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkSetLocal(JNIEnv* env, jclass obj, jint player);
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkSetGrid(JNIEnv* env, jclass obj, jboolean grid);
 JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkLoadSave(JNIEnv* env, jclass obj, jint player, jbyteArray save);
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkKeep(JNIEnv* env, jclass obj, jint player);
 JNIEXPORT jbyteArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_serializeSRAM(JNIEnv* env, jclass obj);
 JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_unserializeSRAM(JNIEnv* env, jclass obj, jbyteArray data);
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_onSurfaceCreated(JNIEnv* env, jclass obj);

@@ -202,6 +202,11 @@ bool LibretroDroid::linkLoadSave(int player, const int8_t* data, size_t size) {
     return core && core->retro_link_max_players && player >= 0 && core->retro_link_load_save((unsigned) player, data, size);
 }
 
+bool LibretroDroid::linkKeep(int player) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return core && core->retro_link_max_players && player >= 0 && core->retro_link_keep((unsigned) player);
+}
+
 std::pair<int8_t*, size_t> LibretroDroid::serializeSRAM() {
     std::lock_guard<std::mutex> lock(coreLock);
 

@@ -230,6 +230,8 @@ void re_link_set_local(int player) { LibretroDroid::getInstance().linkSetLocal(p
 
 void re_link_set_grid(bool grid) { LibretroDroid::getInstance().linkSetGrid(grid); }
 
+bool re_link_keep(int player) { return LibretroDroid::getInstance().linkKeep(player); }
+
 bool re_link_load_save(int player, const uint8_t *data, size_t size) {
     return LibretroDroid::getInstance().linkLoadSave(player, (const int8_t *) data, size);
 }

@@ -36,6 +36,9 @@ interface NetplayEmulator {
 
     /** The save of the console this device plays, sent to the host when joining. */
     fun linkLocalSave(): ByteArray? = null
+
+    /** The session ended: only the console this device played stays, as its only console. */
+    fun linkKeepLocal() = Unit
 }
 
 class HostStart(val state: ByteArray, val saveRam: ByteArray?)

@@ -290,6 +290,10 @@ class GLRetroView(
             LibretroDroid.linkSetLocal(port)
         }
         override fun linkLocalSave(): ByteArray? = runOnEmulationThread(true) { LibretroDroid.serializeSRAM() }
+        override fun linkKeepLocal() = runOnEmulationThread(true) {
+            LibretroDroid.linkKeep(linkLocal)
+            linkLocal = 0
+        }
     }
 
     /** Consoles the core links inside itself (retrolink): 1 for an ordinary core. */

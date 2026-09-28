@@ -60,6 +60,8 @@ bool re_link_set_players(int count);
 void re_link_set_local(int player);
 void re_link_set_grid(bool grid);
 bool re_link_load_save(int player, const uint8_t *data, size_t size);
+/* Console [player] goes on alone as console 0, with its state and save. */
+bool re_link_keep(int player);
 void re_free(void *data);
 void re_reset(void);
 

@@ -69,8 +69,9 @@ void Core::open(const std::string& soCorePath) {
     retro_link_set_local = (void (*)(unsigned)) dlsym(libHandle, "retro_link_set_local");
     retro_link_set_grid = (void (*)(bool)) dlsym(libHandle, "retro_link_set_grid");
     retro_link_load_save = (bool (*)(unsigned, const void*, size_t)) dlsym(libHandle, "retro_link_load_save");
+    retro_link_keep = (bool (*)(unsigned)) dlsym(libHandle, "retro_link_keep");
     if (!retro_link_max_players || !retro_link_set_players || !retro_link_set_local || !retro_link_set_grid ||
-        !retro_link_load_save) {
+        !retro_link_load_save || !retro_link_keep) {
         retro_link_max_players = nullptr;
     }
 }

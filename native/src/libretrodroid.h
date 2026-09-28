@@ -78,6 +78,7 @@ public:
     void linkSetLocal(int player);
     void linkSetGrid(bool grid);
     bool linkLoadSave(int player, const int8_t *data, size_t size);
+    bool linkKeep(int player);
 
     void onSurfaceCreated();
     void onSurfaceChanged(unsigned int width, unsigned int height);

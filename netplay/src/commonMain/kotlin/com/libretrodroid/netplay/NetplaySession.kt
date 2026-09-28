@@ -306,6 +306,7 @@ class NetplaySession(
             hostPeer?.let { runCatching { it.connection.close() } }
             hostPeer = null
             emulator.stop()
+            if (emulator.linkMaxPlayers > 1) emulator.linkKeepLocal()
             emulator.setRecompiler(emulator.canRecompile)
         }
     }

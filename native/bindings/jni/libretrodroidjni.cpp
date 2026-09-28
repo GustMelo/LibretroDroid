@@ -283,6 +283,10 @@ JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkSetGri
     LibretroDroid::getInstance().linkSetGrid(grid);
 }
 
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkKeep(JNIEnv* env, jclass obj, jint player) {
+    return LibretroDroid::getInstance().linkKeep(player);
+}
+
 JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkLoadSave(
     JNIEnv* env, jclass obj, jint player, jbyteArray save) {
     jsize size = env->GetArrayLength(save);

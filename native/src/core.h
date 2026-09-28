@@ -55,6 +55,7 @@ public:
     void (*retro_link_set_local)(unsigned player) = nullptr;
     void (*retro_link_set_grid)(bool grid) = nullptr;
     bool (*retro_link_load_save)(unsigned player, const void *data, size_t size) = nullptr;
+    bool (*retro_link_keep)(unsigned player) = nullptr;
 
     Core(const std::string& soCorePath);
     ~Core();

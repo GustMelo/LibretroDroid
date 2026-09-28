@@ -20,6 +20,7 @@ import com.libretrodroid.engine.native.re_detach_layer
 import com.libretrodroid.engine.native.re_frame
 import com.libretrodroid.engine.native.re_jit_available
 import com.libretrodroid.engine.native.re_set_variable
+import com.libretrodroid.engine.native.re_link_keep
 import com.libretrodroid.engine.native.re_link_load_save
 import com.libretrodroid.engine.native.re_link_max_players
 import com.libretrodroid.engine.native.re_link_set_grid
@@ -348,6 +349,11 @@ class RetroPlayer(
     }
 
     override fun linkLocalSave(): ByteArray? = onRenderThread { takeBytes { re_serialize_sram(it) } }
+
+    override fun linkKeepLocal() = onRenderThread {
+        re_link_keep(linkLocal)
+        linkLocal = 0
+    }
 
     /**
      * Players sharing this device on a retrolink core: [players] linked consoles, controller port p on console p,
