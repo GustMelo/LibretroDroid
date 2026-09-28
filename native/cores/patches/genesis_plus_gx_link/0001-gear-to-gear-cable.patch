@@ -1,0 +1,613 @@
+diff --git a/core/gg_link.c b/core/gg_link.c
+new file mode 100644
+index 00000000..cb7b48eb
+--- /dev/null
++++ b/core/gg_link.c
+@@ -0,0 +1,436 @@
++/****************************************************************************
++ *  Genesis Plus
++ *  Game Gear Gear-to-Gear cable over Libretro Netpacket
++ *
++ *  The cable (smspower.org/Development/GearToGearCable) wires PC0-PC6 of both
++ *  EXT ports crossed as 0<->2, 1<->3, 4<->5 and 6<->6; in serial mode PC4 is
++ *  the UART output and PC5 its input.
++ *
++ *  Per frame each side sends one packet: the frame number and the events of
++ *  that frame (the pins it drives, each byte it transmits) with their Z80
++ *  cycle. The other side replays frame f - GG_LINK_DELAY during its frame f,
++ *  each event once its own Z80 reaches that cycle, and repeats a frame when
++ *  that packet has not arrived. Both consoles therefore see a cable of fixed
++ *  latency and never drift apart. Every operation is O(1) per event.
++ *
++ ****************************************************************************************/
++
++#include "shared.h"
++#include "gg_link.h"
++
++#ifdef _WIN32
++#include <windows.h>
++#else
++#include <time.h>
++#endif
++
++#ifndef RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE
++#define RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE 78
++#define RETRO_NETPACKET_RELIABLE   (1 << 0)
++#define RETRO_NETPACKET_FLUSH_HINT (1 << 2)
++#define RETRO_NETPACKET_BROADCAST  0xFFFF
++typedef void (RETRO_CALLCONV *retro_netpacket_send_t)(int flags, const void* buf, size_t len, uint16_t client_id);
++typedef void (RETRO_CALLCONV *retro_netpacket_poll_receive_t)(void);
++typedef void (RETRO_CALLCONV *retro_netpacket_start_t)(uint16_t client_id, retro_netpacket_send_t send_fn, retro_netpacket_poll_receive_t poll_receive_fn);
++typedef void (RETRO_CALLCONV *retro_netpacket_receive_t)(const void* buf, size_t len, uint16_t client_id);
++typedef void (RETRO_CALLCONV *retro_netpacket_stop_t)(void);
++typedef void (RETRO_CALLCONV *retro_netpacket_poll_t)(void);
++typedef bool (RETRO_CALLCONV *retro_netpacket_connected_t)(uint16_t client_id);
++typedef void (RETRO_CALLCONV *retro_netpacket_disconnected_t)(uint16_t client_id);
++struct retro_netpacket_callback
++{
++   retro_netpacket_start_t        start;
++   retro_netpacket_receive_t      receive;
++   retro_netpacket_stop_t         stop;
++   retro_netpacket_poll_t         poll;
++   retro_netpacket_connected_t    connected;
++   retro_netpacket_disconnected_t disconnected;
++   const char* protocol_version;
++};
++#endif
++
++#define GG_LINK_DELAY   3     /* frames of cable latency: absorbs Wi-Fi jitter */
++#define GG_LINK_RING    16    /* buffered remote frames, more than 2 * GG_LINK_DELAY + 1 */
++#define GG_LINK_EVENTS  256   /* events per frame; the last slot keeps the latest pins past it */
++#define GG_LINK_WAIT_MS 8     /* how long a frame waits for a late packet before repeating */
++#define GG_LINK_TIMEOUT 600   /* repeated frames (10 s) before a silent peer counts as gone */
++
++#define EVENT_SIZE  7         /* cycle (4), type, a, b */
++#define HEADER_SIZE 6         /* frame (4), count (2) */
++
++enum { EVENT_PINS, EVENT_BYTE };
++
++/* port $05 */
++#define SERIAL_TX_FULL  0x01
++#define SERIAL_RX_FULL  0x02
++#define SERIAL_ERROR    0x04
++#define SERIAL_NMI      0x08
++#define SERIAL_TX_ON    0x10
++#define SERIAL_RX_ON    0x20
++#define SERIAL_ENABLED  (SERIAL_NMI | SERIAL_TX_ON | SERIAL_RX_ON)
++
++/* port $02 */
++#define PARALLEL_NMI    0x80
++#define PC6             0x40
++
++typedef struct
++{
++  uint32 cycle;
++  uint8 type, a, b;
++} link_event;
++
++typedef struct
++{
++  uint16 count;
++  link_event event[GG_LINK_EVENTS];
++} link_frame;
++
++uint8 gg_link_pending;
++
++static struct
++{
++  int active;                         /* a peer is connected */
++  retro_netpacket_send_t send;
++  retro_netpacket_poll_receive_t poll_receive;
++  uint32 frame;                       /* local link frame being emulated */
++  uint32 received;                    /* remote frames received */
++  uint32 stalls;                      /* consecutive repeated frames */
++  link_frame remote[GG_LINK_RING];
++  link_frame local;
++  const link_frame *due;              /* remote frame replayed now */
++  uint16 next;                        /* its next event */
++  uint8 lines;                        /* the remote pins as local PC0-PC6 (undriven = pulled up) */
++  uint8 drive_value, drive_mask;      /* local pins last announced */
++  uint64 clock;                       /* Z80 cycles before the current frame */
++  uint64 tx_end;                      /* when the byte being transmitted leaves */
++} link;
++
++static const uint32 baud_rate[4] = { 4800, 2400, 1200, 300 };
++
++static void nmi_pulse(void)
++{
++  /* NMI is edge-triggered */
++  z80_set_nmi_line(ASSERT_LINE);
++  z80_set_nmi_line(CLEAR_LINE);
++}
++
++/* the cable crosses 0<->2, 1<->3, 4<->5 and keeps 6 */
++static uint8 cross(uint8 pins)
++{
++  return ((pins & 0x03) << 2) | ((pins >> 2) & 0x03) |
++         ((pins & 0x10) << 1) | ((pins >> 1) & 0x10) | (pins & 0x40);
++}
++
++static void record(uint8 type, uint8 a, uint8 b)
++{
++  link_event *event;
++  if (!link.active)
++    return;
++  event = &link.local.event[link.local.count < GG_LINK_EVENTS ? link.local.count++ : GG_LINK_EVENTS - 1];
++  event->cycle = Z80.cycles;
++  event->type = type;
++  event->a = a;
++  event->b = b;
++}
++
++static void set_lines(uint8 lines)
++{
++  uint8 fell = link.lines & ~lines;
++  link.lines = lines;
++
++  /* a falling PC6 input raises the parallel NMI */
++  if ((fell & PC6) && ((io_reg[2] & (PARALLEL_NMI | PC6)) == (PARALLEL_NMI | PC6)))
++    nmi_pulse();
++}
++
++static void apply(const link_event *event)
++{
++  if (event->type == EVENT_PINS)
++  {
++    /* undriven pins are pulled up */
++    set_lines(cross((event->a & event->b) | (~event->b & 0x7F)));
++  }
++  else if (io_reg[5] & SERIAL_RX_ON)
++  {
++    /* a new byte overwrites an unread one, as the UART does */
++    io_reg[4] = event->a;
++    io_reg[5] |= SERIAL_RX_FULL;
++    if (io_reg[5] & SERIAL_NMI)
++      nmi_pulse();
++  }
++}
++
++static void peer_lost(void)
++{
++  if (!link.active)
++    return;
++  link.active = 0;
++  link.due = NULL;
++  gg_link_pending = 0;
++  set_lines(0x7F);
++
++  /* the other console is off: the error bit, and the NMI when serial is on */
++  io_reg[5] |= SERIAL_ERROR;
++  if ((io_reg[5] & SERIAL_ENABLED) == SERIAL_ENABLED)
++    nmi_pulse();
++}
++
++static void announce_pins(int force)
++{
++  uint8 mask = ~io_reg[2] & 0x7F;
++  uint8 value;
++
++  /* the UART owns PC4 (idle high) and PC5 */
++  if (io_reg[5] & SERIAL_TX_ON)
++    mask &= ~0x10;
++  if (io_reg[5] & SERIAL_RX_ON)
++    mask &= ~0x20;
++  value = io_reg[1] & mask;
++
++  if (force || value != link.drive_value || mask != link.drive_mask)
++  {
++    link.drive_value = value;
++    link.drive_mask = mask;
++    record(EVENT_PINS, value, mask);
++  }
++}
++
++static uint64 now(void)
++{
++  return link.clock + Z80.cycles;
++}
++
++static void wait_ms(void)
++{
++#ifdef _WIN32
++  Sleep(1);
++#else
++  struct timespec pause = { 0, 1000000 };
++  nanosleep(&pause, NULL);
++#endif
++}
++
++static void put32(uint8 *out, uint32 value)
++{
++  out[0] = value; out[1] = value >> 8; out[2] = value >> 16; out[3] = value >> 24;
++}
++
++static uint32 get32(const uint8 *in)
++{
++  return in[0] | (in[1] << 8) | (in[2] << 16) | ((uint32)in[3] << 24);
++}
++
++/* Netpacket callbacks: all on the emulation thread */
++
++static void RETRO_CALLCONV link_start(uint16_t client_id, retro_netpacket_send_t send, retro_netpacket_poll_receive_t poll_receive)
++{
++  link.active = 1;
++  link.send = send;
++  link.poll_receive = poll_receive;
++  link.frame = 0;
++  link.received = 0;
++  link.stalls = 0;
++  link.due = NULL;
++  link.local.count = 0;
++  gg_link_pending = 0;
++  io_reg[5] &= ~SERIAL_ERROR;
++
++  /* the first packet tells the peer which pins this side drives */
++  announce_pins(1);
++}
++
++static void RETRO_CALLCONV link_receive(const void *buf, size_t len, uint16_t client_id)
++{
++  const uint8 *in = buf;
++  link_frame *frame;
++  uint32 number, oldest;
++  uint16 i, count;
++
++  if (!link.active)
++    return;
++
++  if (len < HEADER_SIZE)
++    goto invalid;
++  number = get32(in);
++  count = in[4] | (in[5] << 8);
++  oldest = link.frame > GG_LINK_DELAY ? link.frame - GG_LINK_DELAY : 0;
++
++  /* frames arrive in order, and never so far ahead that they overwrite one not yet replayed */
++  if (number != link.received || number - oldest >= GG_LINK_RING ||
++      count > GG_LINK_EVENTS || len != HEADER_SIZE + (size_t)count * EVENT_SIZE)
++    goto invalid;
++
++  frame = &link.remote[number % GG_LINK_RING];
++  for (i = 0, in += HEADER_SIZE; i < count; i++, in += EVENT_SIZE)
++  {
++    link_event *event = &frame->event[i];
++    event->cycle = get32(in);
++    event->type = in[4];
++    event->a = in[5];
++    event->b = in[6];
++    if (event->type > EVENT_BYTE || (event->type == EVENT_PINS && ((event->a | event->b) & 0x80)))
++      goto invalid;
++  }
++  frame->count = count;
++  link.received++;
++  return;
++
++invalid:
++  peer_lost();
++}
++
++static void RETRO_CALLCONV link_stop(void)
++{
++  peer_lost();
++  link.send = NULL;
++  link.poll_receive = NULL;
++}
++
++static bool RETRO_CALLCONV link_connected(uint16_t client_id)
++{
++  return true;
++}
++
++static void RETRO_CALLCONV link_disconnected(uint16_t client_id)
++{
++  peer_lost();
++}
++
++static const struct retro_netpacket_callback callbacks =
++{
++  link_start,
++  link_receive,
++  link_stop,
++  NULL,
++  link_connected,
++  link_disconnected,
++  "gg-link-1"
++};
++
++void gg_link_register(retro_environment_t environment)
++{
++  memset(&link, 0, sizeof(link));
++  link.lines = 0x7F;
++  gg_link_pending = 0;
++  environment(RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE, (void *)&callbacks);
++}
++
++int gg_link_frame_begin(void)
++{
++  uint32 wanted;
++  int waited;
++
++  if (!link.active || link.frame < GG_LINK_DELAY)
++    return 1;
++
++  wanted = link.frame - GG_LINK_DELAY;
++  for (waited = 0; link.received <= wanted && link.active; waited++)
++  {
++    if (link.poll_receive)
++      link.poll_receive();
++    if (link.received > wanted || waited == GG_LINK_WAIT_MS)
++      break;
++    wait_ms();
++  }
++
++  if (!link.active)
++    return 1;
++
++  if (link.received <= wanted)
++  {
++    if (++link.stalls < GG_LINK_TIMEOUT)
++      return 0;
++    peer_lost();
++    return 1;
++  }
++
++  link.stalls = 0;
++  link.due = &link.remote[wanted % GG_LINK_RING];
++  link.next = 0;
++  gg_link_pending = link.due->count != 0;
++  return 1;
++}
++
++void gg_link_frame_end(void)
++{
++  uint8 packet[HEADER_SIZE + GG_LINK_EVENTS * EVENT_SIZE];
++  uint8 *out = packet + HEADER_SIZE;
++  uint16 i;
++
++  /* events stamped past the last line still belong to this frame */
++  if (link.due)
++  {
++    while (link.next < link.due->count)
++      apply(&link.due->event[link.next++]);
++    link.due = NULL;
++    gg_link_pending = 0;
++  }
++
++  link.clock += lines_per_frame * MCYCLES_PER_LINE;
++
++  if (!link.active)
++    return;
++
++  put32(packet, link.frame);
++  packet[4] = link.local.count;
++  packet[5] = link.local.count >> 8;
++  for (i = 0; i < link.local.count; i++, out += EVENT_SIZE)
++  {
++    const link_event *event = &link.local.event[i];
++    put32(out, event->cycle);
++    out[4] = event->type;
++    out[5] = event->a;
++    out[6] = event->b;
++  }
++  link.send(RETRO_NETPACKET_RELIABLE | RETRO_NETPACKET_FLUSH_HINT, packet, out - packet, RETRO_NETPACKET_BROADCAST);
++  link.local.count = 0;
++  link.frame++;
++}
++
++void gg_link_sync(void)
++{
++  const link_frame *due = link.due;
++  if (!due)
++    return;
++  while (link.next < due->count && due->event[link.next].cycle <= Z80.cycles)
++    apply(&due->event[link.next++]);
++  gg_link_pending = link.next < due->count;
++}
++
++unsigned int gg_link_parallel_read(void)
++{
++  uint8 inputs = io_reg[2] & 0x7F;
++  gg_link_sync();
++  return (io_reg[1] & ~inputs) | (link.lines & inputs);
++}
++
++unsigned int gg_link_receive_read(void)
++{
++  gg_link_sync();
++  io_reg[5] &= ~SERIAL_RX_FULL;
++  return io_reg[4];
++}
++
++unsigned int gg_link_status_read(void)
++{
++  gg_link_sync();
++  if ((io_reg[5] & SERIAL_TX_FULL) && now() >= link.tx_end)
++    io_reg[5] &= ~SERIAL_TX_FULL;
++  return io_reg[5];
++}
++
++void gg_link_pins_changed(void)
++{
++  announce_pins(0);
++}
++
++void gg_link_transmit(unsigned int data)
++{
++  if (!(io_reg[5] & SERIAL_TX_ON))
++    return;
++
++  /* 8N1: ten bits at the selected rate */
++  link.tx_end = now() + (uint64)system_clock * 10 / baud_rate[io_reg[5] >> 6];
++  io_reg[5] |= SERIAL_TX_FULL;
++  record(EVENT_BYTE, data, 0);
++}
+diff --git a/core/gg_link.h b/core/gg_link.h
+new file mode 100644
+index 00000000..e4314fe4
+--- /dev/null
++++ b/core/gg_link.h
+@@ -0,0 +1,36 @@
++/****************************************************************************
++ *  Genesis Plus
++ *  Game Gear Gear-to-Gear cable over Libretro Netpacket
++ *
++ *  Each console runs on its own device. Every frame sends the other side what
++ *  its EXT port did (parallel pin changes, serial bytes), stamped with the Z80
++ *  cycle; the receiver replays it GG_LINK_DELAY frames later at the same cycle.
++ *
++ ****************************************************************************************/
++
++#ifndef _GG_LINK_H_
++#define _GG_LINK_H_
++
++#include <libretro.h>
++
++/* nonzero while remote events of the current frame are waiting for their cycle */
++extern uint8 gg_link_pending;
++
++/* registers the Netpacket interface; call once a Game Gear game is loaded */
++extern void gg_link_register(retro_environment_t environment);
++
++/* 0 when the peer is late and the frame must be repeated instead of emulated */
++extern int gg_link_frame_begin(void);
++extern void gg_link_frame_end(void);
++
++/* replays remote events due at the current Z80 cycle */
++extern void gg_link_sync(void);
++
++/* EXT port accesses (ports $01-$05) */
++extern unsigned int gg_link_parallel_read(void);
++extern unsigned int gg_link_receive_read(void);
++extern unsigned int gg_link_status_read(void);
++extern void gg_link_pins_changed(void);
++extern void gg_link_transmit(unsigned int data);
++
++#endif /* _GG_LINK_H_ */
+diff --git a/core/io_ctrl.c b/core/io_ctrl.c
+index 34343279..b2dad954 100644
+--- a/core/io_ctrl.c
++++ b/core/io_ctrl.c
+@@ -49,6 +49,7 @@
+ #include "paddle.h"
+ #include "sportspad.h"
+ #include "graphic_board.h"
++#include "gg_link.h"
+ #include "smash.h"
+ 
+ uint8 io_reg[0x10];
+@@ -622,18 +623,22 @@ void io_gg_write(unsigned int offset, unsigned int data)
+   {
+     case 1: /* Parallel data register */
+       io_reg[1] = data;
++      gg_link_pins_changed();
+       return;
+ 
+     case 2: /* Data direction register and NMI enable */
+       io_reg[2] = data;
++      gg_link_pins_changed();
+       return;
+ 
+     case 3: /* Transmit data buffer */
+       io_reg[3] = data;
++      gg_link_transmit(data);
+       return;
+ 
+     case 5: /* Serial control (bits 0-2 are read-only) */
+-      io_reg[5] = data & 0xF8;
++      io_reg[5] = (data & 0xF8) | (io_reg[5] & 0x07);
++      gg_link_pins_changed();
+       return;
+ 
+     case 6: /* PSG Stereo output control */
+@@ -653,8 +658,8 @@ unsigned int io_gg_read(unsigned int offset)
+     case 0: /* Mode Register */
+       return (io_reg[0] & ~(input.pad[0] & INPUT_START));
+ 
+-    case 1: /* Parallel data register (not connected) */
+-      return ((io_reg[1] & ~(io_reg[2] & 0x7F)) | (io_reg[2] & 0x7F));
++    case 1: /* Parallel data register (Gear-to-Gear cable) */
++      return gg_link_parallel_read();
+ 
+     case 2: /* Data direction register and NMI enable */
+       return io_reg[2];
+@@ -663,10 +668,10 @@ unsigned int io_gg_read(unsigned int offset)
+       return io_reg[3];
+ 
+     case 4: /* Receive data buffer */
+-      return io_reg[4];
++      return gg_link_receive_read();
+ 
+     case 5: /* Serial control */
+-      return io_reg[5];
++      return gg_link_status_read();
+ 
+     default: /* Write-Only */
+       return 0xFF;
+diff --git a/core/z80/z80.c b/core/z80/z80.c
+index 74d5053c..6029ef07 100644
+--- a/core/z80/z80.c
++++ b/core/z80/z80.c
+@@ -126,6 +126,7 @@
+  *****************************************************************************/
+ #include "shared.h"
+ #include "z80.h"
++#include "gg_link.h"
+ 
+ /* execute main opcodes inside a big switch statement */
+ #define BIG_SWITCH 1
+@@ -3419,6 +3420,10 @@ void z80_reset(void)
+  ****************************************************************************/
+ void z80_run(unsigned int cycles)
+ {
++  /* Gear-to-Gear events due before this slice */
++  if (gg_link_pending)
++    gg_link_sync();
++
+   while( Z80.cycles < cycles )
+   {
+     /* check for IRQs before each instruction */
+diff --git a/libretro/libretro.c b/libretro/libretro.c
+index 798c6cc5..6047f106 100644
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -80,6 +80,7 @@
+ #include "shared.h"
+ #include "md_ntsc.h"
+ #include "sms_ntsc.h"
++#include "gg_link.h"
+ #include "osd.h"
+ 
+ #define STATIC_ASSERT(name, test) typedef struct { int assert_[(test)?1:-1]; } assert_ ## name ## _
+@@ -3687,6 +3688,9 @@ bool retro_load_game(const struct retro_game_info *info)
+ 
+    init_frameskip();
+ 
++   if (system_hw == SYSTEM_GG)
++      gg_link_register(environ_cb);
++
+    return true;
+ 
+ error:
+@@ -3949,6 +3953,13 @@ void retro_run(void)
+     update_audio_latency = false;
+   }
+ 
++   /* Gear-to-Gear: repeat the frame while the other console is behind */
++   if (system_hw == SYSTEM_GG && !gg_link_frame_begin())
++   {
++      video_cb(NULL, vwidth - vwoffset, vheight, 720 * 2);
++      return;
++   }
++
+    if (system_hw == SYSTEM_MCD)
+    {
+       system_frame_scd(do_skip);
+@@ -3962,6 +3973,9 @@ void retro_run(void)
+       system_frame_sms(do_skip);
+    }
+ 
++   if (system_hw == SYSTEM_GG)
++      gg_link_frame_end();
++
+    soundbuffer_size = audio_update(soundbuffer);
+ 
+    /* Force viewport update when SMS border changes after startup undetected */
