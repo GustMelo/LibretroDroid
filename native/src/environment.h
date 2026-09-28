@@ -87,6 +87,7 @@ public:
     retro_hw_context_reset_t getHwContextDestroy() const;
 
     struct retro_disk_control_callback* getRetroDiskControlCallback() const;
+    struct retro_netpacket_callback* getRetroNetpacketCallback() const;
 
     int getPixelFormat() const;
     bool isUseHwAcceleration() const;
@@ -122,6 +123,7 @@ private:
     retro_hw_context_reset_t hw_context_reset = nullptr;
     retro_hw_context_reset_t hw_context_destroy = nullptr;
     struct retro_disk_control_callback *retro_disk_control_callback = nullptr;
+    struct retro_netpacket_callback *retro_netpacket_callback = nullptr;
 
     std::string savesDirectory;
     std::string systemDirectory;
@@ -167,4 +169,3 @@ public:
 };
 
 #endif
-

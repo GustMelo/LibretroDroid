@@ -48,6 +48,7 @@ void Environment::deinitialize() {
     hw_context_destroy = nullptr;
 
     retro_disk_control_callback = nullptr;
+    retro_netpacket_callback = nullptr;
 
     savesDirectory = std::string();
     systemDirectory = std::string();
@@ -302,6 +303,11 @@ bool Environment::handle_callback_environment(unsigned cmd, void *data) {
             return true;
         }
 
+        case RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE:
+            LOGD("Called RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE");
+            retro_netpacket_callback = static_cast<struct retro_netpacket_callback*>(data);
+            return retro_netpacket_callback != nullptr;
+
         case RETRO_ENVIRONMENT_GET_PERF_INTERFACE:
             LOGD("Called RETRO_ENVIRONMENT_GET_PERF_INTERFACE");
             return false;
@@ -393,6 +399,10 @@ retro_hw_context_reset_t Environment::getHwContextDestroy() const {
 
 struct retro_disk_control_callback* Environment::getRetroDiskControlCallback() const {
     return retro_disk_control_callback;
+}
+
+struct retro_netpacket_callback* Environment::getRetroNetpacketCallback() const {
+    return retro_netpacket_callback;
 }
 
 int Environment::getPixelFormat() const {
