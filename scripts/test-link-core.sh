@@ -7,8 +7,8 @@ CORE="${1:?usage: test-link-core.sh core.dylib diagnostic.gba}"
 ROM="${2:?usage: test-link-core.sh core.dylib diagnostic.gba}"
 OUT="$ROOT/build/native-tests"
 mkdir -p "$OUT"
-LIBS=()
-if [ "$(uname -s)" = Linux ]; then LIBS+=(-ldl); fi
+set --
+if [ "$(uname -s)" = Linux ]; then set -- -ldl; fi
 c++ -std=c++17 "$ROOT/native/tests/netpacket_core_test.cpp" \
-    "$ROOT/native/src/netpacket.cpp" "${LIBS[@]}" -o "$OUT/netpacket-core"
+    "$ROOT/native/src/netpacket.cpp" "$@" -o "$OUT/netpacket-core"
 "$OUT/netpacket-core" "$CORE" "$ROM"
