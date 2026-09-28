@@ -307,6 +307,11 @@ void re_netpacket_poll(void) { libretrodroid::Netpacket::getInstance().poll(); }
 
 void re_netpacket_stop(void) { libretrodroid::Netpacket::getInstance().stop(); }
 
+void re_netpacket_drain(re_netpacket_packet_fn callback, void *context) {
+    libretrodroid::Netpacket::getInstance().drain(
+        context, reinterpret_cast<libretrodroid::Netpacket::PacketCallback>(callback));
+}
+
 void re_set_motion(unsigned port, int source, float x, float y) {
     if (port >= buttons.size() || source < 0 || source > 2) return;
     LibretroDroid::getInstance().onMotionEvent(port, source, x, y);
