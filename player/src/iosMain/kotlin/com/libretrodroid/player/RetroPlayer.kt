@@ -362,8 +362,12 @@ class RetroPlayer(
     fun setLocalLinkPlayers(players: Int): Boolean = onRenderThread {
         val linked = re_link_set_players(players)
         re_link_set_grid(linked && players > 1)
+        if (linked) localPlayers = players
         linked
     }
+
+    /** Players sharing this device: each controller plays its own port, the touch pad port 0. */
+    @Volatile private var localPlayers = 1
 
     override fun startAsClient(port: Int, players: Int, inputDelay: Int, state: ByteArray, saveRam: ByteArray?): Boolean = onRenderThread {
 
@@ -458,8 +462,14 @@ class RetroPlayer(
         }
         if (paused) return
         val local = gamepads.buttons or touchButtons.value
+        val sharing = localPlayers > 1
         for (port in 0 until PORTS) {
-            val mask = remoteButtons[port].value or if (port == localPort) local else 0
+            val here = when {
+                sharing -> gamepads.buttons(port) or if (port == 0) touchButtons.value else 0
+                port == localPort -> local
+                else -> 0
+            }
+            val mask = remoteButtons[port].value or here
             re_set_buttons(port.toUInt(), mask.toUShort())
             val axes = remoteAxes[port].value
             if (axes != appliedAxes[port]) {

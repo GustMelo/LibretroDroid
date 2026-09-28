@@ -10,9 +10,13 @@ import platform.darwin.NSObjectProtocol
 
 internal class GamepadInput {
     private val mask = atomic(0)
+    /** Each controller's buttons, in connection order, for players sharing the device. */
+    private val masks = List(MAX_PLAYERS) { atomic(0) }
     private var observer: NSObjectProtocol? = null
 
     val buttons: Int get() = mask.value
+
+    fun buttons(player: Int): Int = masks.getOrNull(player)?.value ?: 0
 
     fun start() {
         GCController.controllers().forEach { attach(it as GCController) }
@@ -26,10 +30,18 @@ internal class GamepadInput {
         observer = null
         GCController.controllers().forEach { (it as GCController).extendedGamepad?.valueChangedHandler = null }
         mask.value = 0
+        masks.forEach { it.value = 0 }
     }
 
     private fun attach(controller: GCController) {
-        controller.extendedGamepad?.valueChangedHandler = { gamepad, _ -> gamepad?.let { mask.value = it.retroPad() } }
+        controller.extendedGamepad?.valueChangedHandler = { gamepad, _ ->
+            gamepad?.let { pad ->
+                val bits = pad.retroPad()
+                mask.value = bits
+                val index = GCController.controllers().indexOf(controller)
+                if (index in masks.indices) masks[index].value = bits
+            }
+        }
     }
 
     private fun GCExtendedGamepad.retroPad(): Int {
@@ -54,6 +66,7 @@ internal class GamepadInput {
     }
 
     private companion object {
+        const val MAX_PLAYERS = 4
         const val STICK = 0.5f
 
         const val B = 0
