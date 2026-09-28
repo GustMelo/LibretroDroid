@@ -67,6 +67,14 @@ void re_netplay_start(int local_port, int players, int input_delay, int hash_int
 void re_netplay_stop(void);
 void re_netplay_set_input(int port, uint32_t frame, uint16_t buttons);
 
+typedef void (*re_netpacket_send_fn)(void *context, int flags, const void *data, size_t size,
+                                     uint16_t client_id, bool broadcast);
+void re_netpacket_set_transport(void *context, re_netpacket_send_fn send);
+bool re_netpacket_start(uint16_t client_id);
+void re_netpacket_receive(const void *data, size_t size, uint16_t client_id);
+void re_netpacket_poll(void);
+void re_netpacket_stop(void);
+
 /* Analog input for any port. source: 0 d-pad, 1 left stick, 2 right stick; axes in [-1, 1], +y down. */
 void re_set_motion(unsigned port, int source, float x, float y);
 /* Multitap on port 2 when the core offers one (up to four players); false restores a plain pad.

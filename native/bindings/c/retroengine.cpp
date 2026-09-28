@@ -1,4 +1,5 @@
 #include "retroengine.h"
+#include "../../src/netpacket.h"
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -287,6 +288,24 @@ void re_netplay_stop(void) { LibretroDroid::getInstance().stopNetplay(); }
 void re_netplay_set_input(int port, uint32_t frame, uint16_t buttons) {
     Netplay::getInstance().setRemote(port, frame, buttons);
 }
+
+void re_netpacket_set_transport(void *context, re_netpacket_send_fn send) {
+    libretrodroid::Netpacket::getInstance().setTransport(
+        context,
+        reinterpret_cast<libretrodroid::Netpacket::TransportSend>(send));
+}
+
+bool re_netpacket_start(uint16_t client_id) {
+    return libretrodroid::Netpacket::getInstance().start(client_id);
+}
+
+void re_netpacket_receive(const void *data, size_t size, uint16_t client_id) {
+    libretrodroid::Netpacket::getInstance().receive(data, size, client_id);
+}
+
+void re_netpacket_poll(void) { libretrodroid::Netpacket::getInstance().poll(); }
+
+void re_netpacket_stop(void) { libretrodroid::Netpacket::getInstance().stop(); }
 
 void re_set_motion(unsigned port, int source, float x, float y) {
     if (port >= buttons.size() || source < 0 || source > 2) return;

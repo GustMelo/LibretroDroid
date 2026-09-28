@@ -28,6 +28,7 @@
 #include "../../libretro-common/include/libretro.h"
 #include "log.h"
 #include "environment.h"
+#include "netpacket.h"
 #include "vfs/vfs.h"
 #include "microphone/microphoneinterface.h"
 #include "netplay.h"
@@ -49,6 +50,7 @@ void Environment::deinitialize() {
 
     retro_disk_control_callback = nullptr;
     retro_netpacket_callback = nullptr;
+    libretrodroid::Netpacket::getInstance().clear();
 
     savesDirectory = std::string();
     systemDirectory = std::string();
@@ -306,6 +308,7 @@ bool Environment::handle_callback_environment(unsigned cmd, void *data) {
         case RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE:
             LOGD("Called RETRO_ENVIRONMENT_SET_NETPACKET_INTERFACE");
             retro_netpacket_callback = static_cast<struct retro_netpacket_callback*>(data);
+            libretrodroid::Netpacket::getInstance().setCoreInterface(retro_netpacket_callback);
             return retro_netpacket_callback != nullptr;
 
         case RETRO_ENVIRONMENT_GET_PERF_INTERFACE:

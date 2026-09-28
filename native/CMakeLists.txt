@@ -27,6 +27,7 @@ set(RE_COMMON_SOURCES
         src/environment.cpp
         src/input.cpp
         src/netplay.cpp
+        src/netpacket.cpp
         src/shadermanager.cpp
         src/rumble.cpp
         src/rumblestate.cpp
