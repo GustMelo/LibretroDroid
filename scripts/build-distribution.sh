@@ -3,6 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 scripts/test-native.sh
+scripts/test-gb-link.sh
 native/scripts/build-angle-ios.sh
 native/scripts/build-cores.sh android
 native/scripts/build-cores.sh ios

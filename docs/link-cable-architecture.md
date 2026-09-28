@@ -38,6 +38,12 @@ session before the core is unloaded.
 The Gambatte patch keeps a silent peer from freezing emulation: TCP_NODELAY,
 two-second send/receive timeouts, a one-second connect timeout, exact two-byte
 reads, SO_REUSEADDR and a monotonic reconnect throttle.
+A second patch fixes upstream Gambatte's received-bit shifting when a game
+reads SB/SC in the middle of a network transfer (polling instead of the serial
+interrupt): it took the byte's top bits again and corrupted it.
+`scripts/test-gb-link.sh` runs two patched cores on the Mac, linked over
+127.0.0.1, with a generated serial test ROM; each must receive its partner's
+bytes intact. The release script runs it.
 
 While a link is active the players refuse save states, state loads, reset,
 fast-forward and controller netplay: each would desynchronize the two sides.
