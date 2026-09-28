@@ -1,40 +1,46 @@
-# Link Cable integration
+# Link Cable integration status
 
-The link-cable path is separate from deterministic controller netplay. Each
-peer owns a complete emulator instance and the transport carries only serial
-link events.
+This is work in progress. The app does not yet provide a working link session.
+The current release dependency remains unchanged.
 
-## Runtime path
+## Chosen transport boundary
 
-```text
-GB/GBC serial or GBA SIO driver
-        -> native link adapter
-        -> KMP LinkCableSession
-        -> framed TCP/Bonjour or NSD transport
-```
+Use the current Libretro Netpacket ABI (environment command 78), not the old
+experimental command 76. Core start receives send and poll-receive callbacks;
+broadcast is destination 0xffff. Reliable ordering is provided by TCP.
+The native bridge must only invoke core callbacks on the emulation thread.
+Socket receiver threads must enqueue packets for that thread, never call the
+core directly. Stop must run before unloading the core shared library.
 
-The mGBA GBA implementation uses `GBASIOLockstepDriver` as the timing
-authority. The network adapter must provide ordered transfer events and wake
-the core when the matching peer event arrives. It must never send video,
-audio, controller input, or a full save state on the hot path.
+KMP's NetpacketChannel frames opaque core messages with a bounded 64 KiB
+payload and reuses its receive buffer. It does not interpret emulated serial
+registers. Its buffer must be copied into bounded session storage before the
+next read if the consumer has not finished.
 
-## Compatibility contract
+## GBA reference
 
-The handshake includes protocol version, system family, ROM fingerprint, core
-version, player count, and a session nonce. A session is rejected if any
-determinism-affecting field differs. Transfer packets contain a sequence,
-emulated cycle, and serial value; reset and disconnect are explicit events.
+Aelvryx/mgba-wifi-link at 9e919b0cfbb93af7d1171570dfc6745d00eeebab
+is the evaluated reference, not yet the packaged app core. It uses replicated
+P0/P1 machines: each peer simulates both cartridges and synchronizes inputs.
+Local SIO scheduling therefore avoids a network round trip per serial word.
+This costs additional CPU and memory; measurements on devices remain required.
+Its current documented scope is two-player GBA Multi-Pak. This does not prove
+GB/GBC, four-player GBA, or arbitrary game compatibility.
 
-## Platform boundary
+A host build and real-core lifecycle smoke test pass. The smoke test loads
+the supplied diagnostic ROM, registers Netpacket, starts/stops a host and
+unloads the core. It does NOT prove data exchange between two linked cores.
 
-`commonMain` owns the wire codec, session state, validation, timeout policy,
-and metrics. `androidMain` and `iosMain` own only socket/discovery details.
-The native bridge owns installation and removal of the GB/GBC serial or GBA
-SIO driver in the core. This keeps the emulator loop free of UI and coroutine
-allocations.
+## Remaining integration
 
-## State and saves
+- Bounded session queues, handshake, timeout and close behavior.
+- JNI and Kotlin/Native bindings with emulation-thread dispatch.
+- GBA linked-pair integration and GB/GBC linked execution.
+- Independent local battery-save ownership; forbid unsafe live state loads.
+- App host/join UI, discovery, network permission and lifecycle integration.
+- Two-core diagnostic exchange, platform builds and physical-device validation.
+- Versioned artifacts, publication and app dependency update.
 
-Save states are disabled while a live cable session is active unless all peers
-checkpoint together. Battery saves remain per logical cartridge. On a failed
-session, the core resets the link driver before returning to solo mode.
+The earlier LinkCableProtocol byte-transfer codec is not wired to any core
+and is not the wire format of the GBA reference. It must not be presented as
+working link support or used to truncate 16/32-bit SIO data.
