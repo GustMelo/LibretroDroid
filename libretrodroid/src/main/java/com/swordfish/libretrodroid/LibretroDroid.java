@@ -106,6 +106,15 @@ public class LibretroDroid {
 
     public static native void step(GLRetroView retroView);
 
+    /** GL thread: renders the frame once more at width x height and writes the previous one (RGBA, top row first). */
+    public static native boolean streamFrame(int width, int height, java.nio.ByteBuffer buffer);
+    /** GL thread: frees what streamFrame allocated. */
+    public static native void streamStop();
+    /** Taps the audio as played, for readStreamAudio. */
+    public static native void setStreamAudio(boolean enabled);
+    /** 48 kHz interleaved 16-bit stereo into a direct buffer; returns the frames written. */
+    public static native int readStreamAudio(java.nio.ByteBuffer buffer, int frames);
+
     public static native void startNetplay(int localPort, int players, int inputDelay, int hashInterval, boolean rollback);
     public static native void stopNetplay();
     public static native void redraw();

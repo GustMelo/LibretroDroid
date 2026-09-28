@@ -30,6 +30,7 @@ set(RE_COMMON_SOURCES
         src/shadermanager.cpp
         src/rumble.cpp
         src/rumblestate.cpp
+        src/streamcapture.cpp
         src/utils/utils.cpp
         src/utils/libretrodroidexception.cpp
         src/utils/rect.cpp

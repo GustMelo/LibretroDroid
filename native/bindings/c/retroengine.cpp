@@ -18,7 +18,8 @@
 #include "log.h"
 #include "netplay.h"
 #include "utils/rect.h"
-#include "apple/audio_tap.h"
+#include "audio_tap.h"
+#include "streamcapture.h"
 
 using namespace libretrodroid;
 
@@ -33,46 +34,7 @@ struct Egl {
 
 std::array<uint16_t, 4> buttons {};
 
-struct Stream {
-    GLuint framebuffer = 0;
-    GLuint color = 0;
-    GLuint pixels[2] {0, 0};
-    bool filled[2] {false, false};
-    int width = 0;
-    int height = 0;
-    int index = 0;
-
-    void release() {
-        if (framebuffer) glDeleteFramebuffers(1, &framebuffer);
-        if (color) glDeleteTextures(1, &color);
-        if (pixels[0]) glDeleteBuffers(2, pixels);
-        *this = Stream {};
-    }
-
-    bool prepare(int w, int h) {
-        if (w == width && h == height && framebuffer) return true;
-        release();
-        glGenTextures(1, &color);
-        glBindTexture(GL_TEXTURE_2D, color);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glGenFramebuffers(1, &framebuffer);
-        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
-        bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glGenBuffers(2, pixels);
-        for (GLuint buffer : pixels) {
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer);
-            glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(w) * h * 4, nullptr, GL_STREAM_READ);
-        }
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        width = w;
-        height = h;
-        if (!complete) release();
-        return complete;
-    }
-} stream;
+StreamCapture stream;
 
 template <typename F>
 bool guarded(const char *what, F &&body) {
@@ -338,26 +300,10 @@ bool re_set_multitap(bool enabled) {
 }
 
 void re_stream_frame(int width, int height, re_video_fn video, void *context) {
-    if (width <= 0 || height <= 0 || !video || !stream.prepare(width, height)) return;
-    if (!guarded("stream", [] { LibretroDroid::getInstance().renderTo(stream.framebuffer, stream.width, stream.height); })) return;
-    const GLsizeiptr size = static_cast<GLsizeiptr>(width) * height * 4;
-    glBindFramebuffer(GL_FRAMEBUFFER, stream.framebuffer);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, stream.pixels[stream.index]);
-    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    stream.filled[stream.index] = true;
-    const int previous = stream.index ^ 1;
-    if (stream.filled[previous]) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, stream.pixels[previous]);
-        auto *data = static_cast<const uint8_t *>(glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT));
-        if (data) {
-            video(context, data, width, height);
-            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-        }
-    }
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    stream.index = previous;
+    if (!video) return;
+    guarded("stream", [&] {
+        stream.capture(width, height, [&](const uint8_t *pixels, int w, int h) { video(context, pixels, w, h); });
+    });
 }
 
 void re_stream_stop(void) { stream.release(); }

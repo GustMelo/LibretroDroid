@@ -25,6 +25,8 @@
 #include <unordered_set>
 #include <mutex>
 #include <optional>
+#include <algorithm>
+#include <cstring>
 
 #include "libretrodroid.h"
 #include "netplay.h"
@@ -44,6 +46,8 @@
 #include "renderers/es2/imagerendereres2.h"
 #include "renderers/es3/imagerendereres3.h"
 #include "utils/jnistring.h"
+#include "streamcapture.h"
+#include "audio_tap.h"
 
 namespace libretrodroid {
 extern "C" {
@@ -652,6 +656,113 @@ JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setAspectR
     jfloat ratio
 ) {
     LibretroDroid::getInstance().setAspectRatioOverride(ratio);
+}
+/*
+ * Streaming the game while it plays here (online guests watch it): each frame rendered once more offscreen and
+ * read back, and the audio exactly as played. The audio waits in a short ring for the reader (WebRTC's record
+ * thread), converted to 48 kHz; no Java runs on the audio thread.
+ */
+namespace {
+StreamCapture streamCapture;
+
+constexpr int STREAM_RATE = 48000;
+// A quarter second at most: the oldest audio goes first, so a slow reader never builds up delay.
+constexpr size_t STREAM_AUDIO_FRAMES = 12000;
+std::mutex streamAudioLock;
+std::vector<int16_t> streamAudio(STREAM_AUDIO_FRAMES * 2);
+size_t streamAudioRead = 0;
+size_t streamAudioCount = 0;
+double streamAudioPhase = 0.0;
+
+void onStreamAudio(void *, const int16_t *frames, size_t count) {
+    std::unique_lock<std::mutex> lock(streamAudioLock, std::try_to_lock);
+    if (!lock.owns_lock()) return;
+    for (size_t i = 0; i < count; i++) {
+        if (streamAudioCount == STREAM_AUDIO_FRAMES) {
+            streamAudioRead = (streamAudioRead + 1) % STREAM_AUDIO_FRAMES;
+            streamAudioCount--;
+        }
+        size_t write = (streamAudioRead + streamAudioCount) % STREAM_AUDIO_FRAMES;
+        streamAudio[write * 2] = frames[i * 2];
+        streamAudio[write * 2 + 1] = frames[i * 2 + 1];
+        streamAudioCount++;
+    }
+}
+}
+
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_streamFrame(
+    JNIEnv* env,
+    jclass obj,
+    jint width,
+    jint height,
+    jobject buffer
+) {
+    auto *destination = static_cast<uint8_t *>(env->GetDirectBufferAddress(buffer));
+    jlong capacity = env->GetDirectBufferCapacity(buffer);
+    if (!destination) return false;
+    bool delivered = false;
+    try {
+        streamCapture.capture(width, height, [&](const uint8_t *pixels, int w, int h) {
+            auto size = static_cast<jlong>(w) * h * 4;
+            if (size > capacity) return;
+            std::memcpy(destination, pixels, static_cast<size_t>(size));
+            delivered = true;
+        });
+    } catch (std::exception &exception) {
+        LOGE("Error in streamFrame: %s", exception.what());
+    }
+    return delivered;
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_streamStop(JNIEnv* env, jclass obj) {
+    streamCapture.release();
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setStreamAudio(
+    JNIEnv* env,
+    jclass obj,
+    jboolean enabled
+) {
+    {
+        std::lock_guard<std::mutex> lock(streamAudioLock);
+        streamAudioRead = 0;
+        streamAudioCount = 0;
+        streamAudioPhase = 0.0;
+    }
+    if (enabled) setAudioTap(onStreamAudio, nullptr); else setAudioTap(nullptr, nullptr);
+}
+
+JNIEXPORT jint JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_readStreamAudio(
+    JNIEnv* env,
+    jclass obj,
+    jobject buffer,
+    jint frames
+) {
+    auto *output = static_cast<int16_t *>(env->GetDirectBufferAddress(buffer));
+    jlong capacity = env->GetDirectBufferCapacity(buffer);
+    if (!output || frames <= 0) return 0;
+    const int wanted = static_cast<int>(std::min<jlong>(frames, capacity / 4));
+    const double step = static_cast<double>(audioTapSampleRate()) / STREAM_RATE;
+    std::lock_guard<std::mutex> lock(streamAudioLock);
+    int produced = 0;
+    while (produced < wanted) {
+        auto whole = static_cast<size_t>(streamAudioPhase);
+        if (whole + 1 >= streamAudioCount) break;
+        double t = streamAudioPhase - static_cast<double>(whole);
+        size_t a = (streamAudioRead + whole) % STREAM_AUDIO_FRAMES;
+        size_t b = (a + 1) % STREAM_AUDIO_FRAMES;
+        for (int channel = 0; channel < 2; channel++) {
+            double value = streamAudio[a * 2 + channel] * (1.0 - t) + streamAudio[b * 2 + channel] * t;
+            output[produced * 2 + channel] = static_cast<int16_t>(value);
+        }
+        produced++;
+        streamAudioPhase += step;
+        auto consumed = static_cast<size_t>(streamAudioPhase);
+        streamAudioRead = (streamAudioRead + consumed) % STREAM_AUDIO_FRAMES;
+        streamAudioCount -= consumed;
+        streamAudioPhase -= static_cast<double>(consumed);
+    }
+    return produced;
 }
 }
 }

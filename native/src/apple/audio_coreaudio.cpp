@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "audio.h"
-#include "apple/audio_tap.h"
+#include "audio_tap.h"
 #include "log.h"
 #include "resamplers/linearresampler.h"
 
@@ -177,4 +177,6 @@ void setAudioTap(AudioTap audio, void *context) {
     tap = audio;
     tapContext = context;
 }
+
+int32_t audioTapSampleRate() { return static_cast<int32_t>(OUTPUT_SAMPLE_RATE); }
 }

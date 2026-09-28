@@ -15,17 +15,28 @@
  *     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <atomic>
 #include <cmath>
 #include <memory>
+#include <mutex>
 
 #include <oboe/Oboe.h>
 #include <oboe/FifoBuffer.h>
 
 #include "audio.h"
+#include "audio_tap.h"
 #include "log.h"
 #include "resamplers/linearresampler.h"
 
 namespace libretrodroid {
+namespace {
+std::mutex tapLock;
+AudioTap tap = nullptr;
+void *tapContext = nullptr;
+// The device's output rate: Oboe plays at its native rate and the resampler above converts to it.
+std::atomic<int32_t> tapSampleRate {48000};
+}
+
 struct Audio::Impl : public oboe::AudioStreamDataCallback, oboe::AudioStreamErrorCallback {
     struct AudioLatencySettings {
         unsigned bufferSizeInVideoFrames;
@@ -65,6 +76,7 @@ struct Audio::Impl : public oboe::AudioStreamDataCallback, oboe::AudioStreamErro
         oboe::Result result = builder.openManagedStream(stream);
         if (result == oboe::Result::OK) {
             baseConversionFactor = (double) inputSampleRate / stream->getSampleRate();
+            tapSampleRate = stream->getSampleRate();
             fifoBuffer = std::make_unique<oboe::FifoBuffer>(2, bufferSize);
             temporaryAudioBuffer = std::unique_ptr<int16_t[]>(new int16_t[bufferSize]);
             latencyTuner = std::make_unique<oboe::LatencyTuner>(*stream);
@@ -112,6 +124,10 @@ struct Audio::Impl : public oboe::AudioStreamDataCallback, oboe::AudioStreamErro
         resampler.resample(temporaryAudioBuffer.get(), currentFramesToSubmit, outputArray, numFrames);
 
         latencyTuner->tune();
+
+        // Never wait on the audio thread: a tap being replaced just skips one buffer.
+        std::unique_lock<std::mutex> lock(tapLock, std::try_to_lock);
+        if (lock.owns_lock() && tap) tap(tapContext, outputArray, static_cast<size_t>(numFrames));
 
         return oboe::DataCallbackResult::Continue;
     }
@@ -164,4 +180,12 @@ void Audio::write(const int16_t *data, size_t frames) {
 void Audio::setPlaybackSpeed(const double newPlaybackSpeed) {
     impl->playbackSpeed = newPlaybackSpeed;
 }
+
+void setAudioTap(AudioTap audio, void *context) {
+    std::lock_guard<std::mutex> lock(tapLock);
+    tap = audio;
+    tapContext = context;
+}
+
+int32_t audioTapSampleRate() { return tapSampleRate; }
 }

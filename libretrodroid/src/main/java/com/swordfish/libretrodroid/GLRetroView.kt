@@ -42,6 +42,7 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import java.nio.ByteBuffer
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import javax.microedition.khronos.egl.EGLConfig
@@ -124,6 +125,8 @@ class GLRetroView(
 
     @OnLifecycleEvent(Lifecycle.Event.ON_DESTROY)
     fun onDestroy() = catchExceptions {
+        streamSink = null
+        LibretroDroid.setStreamAudio(false)
         LibretroDroid.destroy()
         lifecycle = null
     }
@@ -281,6 +284,51 @@ class GLRetroView(
 
     fun pushNetplayInput(port: Int, frame: Int, buttons: Int) = LibretroDroid.setNetplayInput(port, frame, buttons)
 
+    /** Receives the game while it streams: RGBA rows, top row first, on the GL thread. [pixels] is only valid during the call. */
+    fun interface StreamSink {
+        fun onFrame(pixels: ByteBuffer, width: Int, height: Int)
+    }
+
+    @Volatile private var streamSink: StreamSink? = null
+    private var streamBuffer: ByteBuffer? = null
+    private var streamWidth = 0
+    private var streamHeight = 0
+
+    /**
+     * Streams the game at [width] x [height] (letterboxed) until [stopStream]: every frame to [sink], the sound
+     * through [readStreamAudio]. The screen keeps playing. Same contract as the iOS player's startStream.
+     */
+    fun startStream(width: Int, height: Int, sink: StreamSink) = queueEvent {
+        stopStreamOnRenderThread()
+        streamWidth = width
+        streamHeight = height
+        streamBuffer = ByteBuffer.allocateDirect(width * height * 4)
+        streamSink = sink
+        LibretroDroid.setStreamAudio(true)
+    }
+
+    fun stopStream() = queueEvent { stopStreamOnRenderThread() }
+
+    /**
+     * The streamed sound, exactly as played: 48 kHz interleaved 16-bit stereo into the direct [buffer]. Returns the
+     * frames written, up to [frames]; fewer when the game has not played that much yet. Any thread.
+     */
+    fun readStreamAudio(buffer: ByteBuffer, frames: Int): Int = LibretroDroid.readStreamAudio(buffer, frames)
+
+    private fun stopStreamOnRenderThread() {
+        streamSink = null
+        streamBuffer = null
+        LibretroDroid.setStreamAudio(false)
+        LibretroDroid.streamStop()
+    }
+
+    private fun streamFrame() {
+        val sink = streamSink ?: return
+        val buffer = streamBuffer ?: return
+        buffer.clear()
+        if (LibretroDroid.streamFrame(streamWidth, streamHeight, buffer)) sink.onFrame(buffer, streamWidth, streamHeight)
+    }
+
     val netplayFrame: Int get() = LibretroDroid.netplayFrame()
 
     val netplayStalls: Int get() = LibretroDroid.netplayStalls()
@@ -409,6 +457,7 @@ class GLRetroView(
                 LibretroDroid.redraw()
             } else if (isEmulationReady) {
                 LibretroDroid.step(this@GLRetroView)
+                streamFrame()
                 lifecycle?.coroutineScope?.launch {
                     retroGLEventsSubject.emit(GLRetroEvents.FrameRendered)
                 }
