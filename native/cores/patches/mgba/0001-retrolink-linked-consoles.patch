@@ -1,0 +1,816 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9d528e790..53e5f2cf1 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1093,7 +1093,9 @@ if(BUILD_LIBRETRO)
+ 			set_target_properties(${BINARY_NAME}_libretro PROPERTIES SUFFIX "${LIBRETRO_SUFFIX}.a")
+ 		endif()
+ 	else()
+-		add_library(${BINARY_NAME}_libretro SHARED ${LIBRETRO_CORE_SRC} ${RETRO_SRC} ${CORE_VFS_SRC})
++		# retrolink runs several GBAs on mGBA's lockstep cable inside the core.
++		set(RETROLINK_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/gba/sio/lockstep.c)
++		add_library(${BINARY_NAME}_libretro SHARED ${LIBRETRO_CORE_SRC} ${RETRO_SRC} ${CORE_VFS_SRC} ${RETROLINK_SRC})
+ 		if(NOT APPLE AND NOT WIN32)
+ 			# Export only the retro_* API, as the make build always did
+ 			set_property(TARGET ${BINARY_NAME}_libretro APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/platform/libretro/link.T")
+diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
+index abed4cc7c..e50b8f4f8 100644
+--- a/src/platform/libretro/libretro.c
++++ b/src/platform/libretro/libretro.c
+@@ -1342,16 +1342,19 @@ void retro_get_system_info(struct retro_system_info* info) {
+ 	info->block_extract = false;
+ }
+ 
++#include "retrolink.inl"
++
+ void retro_get_system_av_info(struct retro_system_av_info* info) {
+ 	unsigned width, height;
+-	core->currentVideoSize(core, &width, &height);
++	_rlGeometry(&width, &height);
+ 	info->geometry.base_width = width;
+ 	info->geometry.base_height = height;
+ 	info->geometry.aspect_ratio = width / (double) height;
+ 
+ 	core->baseVideoSize(core, &width, &height);
+-	info->geometry.max_width = width;
+-	info->geometry.max_height = height;
++	/* Room for retrolink's grid of every console. */
++	info->geometry.max_width = width * 2;
++	info->geometry.max_height = height * 2;
+ 
+ 	info->timing.fps = core->frequency(core) / (float) core->frameCycles(core);
+ 
+@@ -1590,6 +1593,9 @@ void retro_run(void) {
+ 			inputCallback(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2)
+ 		);
+ 	}
++	if (_rlRunFrame()) {
++		return;
++	}
+ 	core->setKeys(core, keys);
+ 
+ 	if (!luxSensorUsed) {
+@@ -1931,6 +1937,10 @@ static void _setupMaps(struct mCore* core) {
+ }
+ 
+ void retro_reset(void) {
++	unsigned i;
++	for (i = 1; i < rl.count; ++i) {
++		rl.cores[i]->reset(rl.cores[i]);
++	}
+ 	core->reset(core);
+ 	mRumbleIntegratorReset(&rumble);
+ 	_setupMaps(core);
+@@ -2124,6 +2134,7 @@ void retro_unload_game(void) {
+ 	if (!core) {
+ 		return;
+ 	}
++	_rlShutdown();
+ 	mCoreConfigDeinit(&core->config);
+ 	core->deinit(core);
+ 	mappedMemoryFree(data, dataSize);
+@@ -2136,6 +2147,9 @@ size_t retro_serialize_size(void) {
+ 	if (deferredSetup) {
+ 		_doDeferredSetup();
+ 	}
++	if (rl.count > 1) {
++		return _rlSerialize(NULL, 0);
++	}
+ 	struct VFile* vfm = VFileMemChunk(NULL, 0);
+ 	mCoreSaveStateNamed(core, vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
+ 	size_t size = vfm->size(vfm);
+@@ -2147,6 +2161,9 @@ bool retro_serialize(void* data, size_t size) {
+ 	if (deferredSetup) {
+ 		_doDeferredSetup();
+ 	}
++	if (rl.count > 1) {
++		return _rlSerialize(data, size) != 0;
++	}
+ 	struct VFile* vfm = VFileMemChunk(NULL, 0);
+ 	mCoreSaveStateNamed(core, vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
+ 	if ((ssize_t) size > vfm->size(vfm)) {
+@@ -2165,6 +2182,9 @@ bool retro_unserialize(const void* data, size_t size) {
+ 	if (deferredSetup) {
+ 		_doDeferredSetup();
+ 	}
++	if (_rlIsLinkState(data, size)) {
++		return _rlUnserialize(data, size);
++	}
+ 	struct VFile* vfm = VFileFromConstMemory(data, size);
+ 	bool success = mCoreLoadStateNamed(core, vfm, SAVESTATE_RTC);
+ 	vfm->close(vfm);
+@@ -2253,6 +2273,9 @@ bool retro_load_game_special(unsigned game_type, const struct retro_game_info* i
+ void* retro_get_memory_data(unsigned id) {
+ 	switch (id) {
+ 	case RETRO_MEMORY_SAVE_RAM:
++		if (rl.count > 1 && rl.local && rl.local < rl.count) {
++			return rl.saves[rl.local];
++		}
+ 		return savedata;
+ 	case RETRO_MEMORY_RTC:
+ 		switch (core->platform(core)) {
+@@ -2269,28 +2292,28 @@ void* retro_get_memory_data(unsigned id) {
+ 			break;
+ 		}
+ 	case RETRO_MEMORY_SYSTEM_RAM:
+-		switch (core->platform(core)) {
++		switch (_rlLocalCore()->platform(_rlLocalCore())) {
+ #ifdef M_CORE_GB
+ 		case mPLATFORM_GB:
+-			return ((struct GB*)core->board)->memory.wram;
++			return ((struct GB*)_rlLocalCore()->board)->memory.wram;
+ #endif
+ #ifdef M_CORE_GBA
+ 		case mPLATFORM_GBA:
+-			return ((struct GBA*)core->board)->memory.wram;
++			return ((struct GBA*)_rlLocalCore()->board)->memory.wram;
+ #endif
+ 		default:
+ 			break;
+ 		}
+ 		break;
+ 	case RETRO_MEMORY_VIDEO_RAM:
+-		switch (core->platform(core)) {
++		switch (_rlLocalCore()->platform(_rlLocalCore())) {
+ #ifdef M_CORE_GB
+ 		case mPLATFORM_GB:
+-			return ((struct GB*)core->board)->video.renderer->vram;
++			return ((struct GB*)_rlLocalCore()->board)->video.renderer->vram;
+ #endif
+ #ifdef M_CORE_GBA
+ 		case mPLATFORM_GBA:
+-			return ((struct GBA*)core->board)->video.renderer->vram;
++			return ((struct GBA*)_rlLocalCore()->board)->video.renderer->vram;
+ #endif
+ 		default:
+ 			break;
+@@ -2308,16 +2331,16 @@ size_t retro_get_memory_size(unsigned id) {
+ 		switch (core->platform(core)) {
+ #ifdef M_CORE_GBA
+ 		case mPLATFORM_GBA:
+-			switch (((struct GBA*) core->board)->memory.savedata.type) {
++			switch (((struct GBA*) _rlLocalCore()->board)->memory.savedata.type) {
+ 			case GBA_SAVEDATA_AUTODETECT:
+ 				return GBA_SIZE_FLASH1M;
+ 			default:
+-				return GBASavedataSize(&((struct GBA*) core->board)->memory.savedata);
++				return GBASavedataSize(&((struct GBA*) _rlLocalCore()->board)->memory.savedata);
+ 			}
+ #endif
+ #ifdef M_CORE_GB
+ 		case mPLATFORM_GB:
+-			return ((struct GB*) core->board)->sramSize;
++			return ((struct GB*) _rlLocalCore()->board)->sramSize;
+ #endif
+ 		default:
+ 			break;
+diff --git a/src/platform/libretro/retrolink.inl b/src/platform/libretro/retrolink.inl
+new file mode 100644
+index 000000000..d113e1479
+--- /dev/null
++++ b/src/platform/libretro/retrolink.inl
+@@ -0,0 +1,644 @@
++/* retrolink: several consoles linked by an emulated cable inside one libretro core.
++ *
++ * Console 0 is the core the frontend loaded; consoles 1..N-1 are clones of the same ROM (and GBA BIOS)
++ * with their own save RAM. Controller port p drives console p. All consoles run cooperatively on the
++ * calling thread in a fixed order, so the same inputs give the same result on every device: a netplay
++ * that only exchanges controller input then plays a real link session with no network round trip per
++ * serial transfer. GBA uses mGBA's lockstep coordinator (Multi-Pak, up to 4); GB/GBC use a pair driver
++ * that swaps SB when the clock owner starts a transfer.
++ *
++ * The frontend calls the exported retro_link_* functions on the emulation thread. Included by libretro.c. */
++
++#include <mgba/internal/gba/sio/lockstep.h>
++#include <mgba/internal/gb/sio.h>
++#include <mgba/internal/gb/io.h>
++
++#define RL_MAX 4
++#define RL_MAX_RUN_LOOPS 4000000
++#define RL_STATE_MAGIC 0x4B4E4C52 /* "RLNK" */
++
++struct RetroLinkUser {
++	struct mLockstepUser d;
++	int requestedId;
++	bool asleep;
++};
++
++struct RetroLinkGBNode {
++	struct GBSIODriver d;
++	int index;
++};
++
++static struct {
++	unsigned count;
++	unsigned local;
++	bool grid;
++	bool coordinatorReady;
++	struct mCore* cores[RL_MAX];
++	void* saves[RL_MAX];
++	mColor* video[RL_MAX];
++	void* rom;
++	size_t romSize;
++	mColor* composite;
++	struct GBASIOLockstepCoordinator coordinator;
++	struct GBASIOLockstepDriver drivers[RL_MAX];
++	struct RetroLinkUser users[RL_MAX];
++	struct RetroLinkGBNode gbNodes[2];
++	int16_t audio[GBA_AUDIO_CHUNK_FRAMES * 2];
++} rl;
++
++static int _rlRequestedId(struct mLockstepUser* user) {
++	return ((struct RetroLinkUser*) user)->requestedId;
++}
++
++static void _rlSleep(struct mLockstepUser* user) {
++	((struct RetroLinkUser*) user)->asleep = true;
++}
++
++static void _rlWake(struct mLockstepUser* user) {
++	((struct RetroLinkUser*) user)->asleep = false;
++}
++
++static bool _rlIsGBA(void) {
++#ifdef M_CORE_GBA
++	return core && core->platform(core) == mPLATFORM_GBA;
++#else
++	return false;
++#endif
++}
++
++static unsigned _rlMaxPlayers(void) {
++	if (!core) {
++		return 1;
++	}
++	return _rlIsGBA() ? 4 : 2;
++}
++
++/* ---- GB pair cable ---- */
++
++#ifdef M_CORE_GB
++static bool _rlGBNodeInit(struct GBSIODriver* driver) {
++	UNUSED(driver);
++	return true;
++}
++
++static void _rlGBNodeDeinit(struct GBSIODriver* driver) {
++	UNUSED(driver);
++}
++
++static void _rlGBNodeWriteSB(struct GBSIODriver* driver, uint8_t value) {
++	UNUSED(driver);
++	UNUSED(value);
++}
++
++/* The console that starts a transfer on its own clock receives its partner's SB; the partner, when
++ * waiting on the external clock, receives the starter's SB and completes after the same bit time. */
++static uint8_t _rlGBNodeWriteSC(struct GBSIODriver* driver, uint8_t value) {
++	struct RetroLinkGBNode* node = (struct RetroLinkGBNode*) driver;
++	if ((value & 0x81) != 0x81 || rl.count < 2) {
++		return value;
++	}
++	struct GB* self = rl.cores[node->index]->board;
++	struct GB* peer = rl.cores[!node->index]->board;
++	self->sio.pendingSB = peer->memory.io[GB_REG_SB];
++	uint8_t peerSC = peer->memory.io[GB_REG_SC];
++	if (GBRegisterSCIsEnable(peerSC) && !GBRegisterSCIsShiftClock(peerSC)) {
++		peer->sio.pendingSB = self->memory.io[GB_REG_SB];
++		peer->sio.period = self->sio.period;
++		peer->sio.remainingBits = 8;
++		mTimingDeschedule(&peer->timing, &peer->sio.event);
++		mTimingSchedule(&peer->timing, &peer->sio.event, self->sio.period * (2 - self->doubleSpeed));
++	}
++	return value;
++}
++#endif
++
++/* ---- cable ---- */
++
++/* The cable is rebuilt, not unplugged console by console: pending events would overflow the fixed
++ * per-player queues as each detach notifies the others. */
++static void _rlDrainQueues(void) {
++#ifdef M_CORE_GBA
++	if (!rl.coordinatorReady) {
++		return;
++	}
++	unsigned i;
++	int e;
++	for (i = 0; i < RL_MAX; ++i) {
++		if (!rl.drivers[i].coordinator) {
++			continue;
++		}
++		struct GBASIOLockstepPlayer* player = TableLookup(&rl.coordinator.players, rl.drivers[i].lockstepId);
++		if (!player) {
++			continue;
++		}
++		player->queue = NULL;
++		player->freeList = &player->buffer[0];
++		for (e = 0; e < MAX_LOCKSTEP_EVENTS - 1; ++e) {
++			player->buffer[e].next = &player->buffer[e + 1];
++		}
++		player->buffer[MAX_LOCKSTEP_EVENTS - 1].next = NULL;
++		player->asleep = false;
++	}
++#endif
++}
++
++static void _rlDetachLink(void) {
++	unsigned i;
++	_rlDrainQueues();
++	for (i = 0; i < RL_MAX; ++i) {
++		if (!rl.cores[i]) {
++			continue;
++		}
++		if (_rlIsGBA()) {
++#ifdef M_CORE_GBA
++			if (rl.drivers[i].coordinator) {
++				rl.cores[i]->setPeripheral(rl.cores[i], mPERIPH_GBA_LINK_PORT, NULL);
++				GBASIOLockstepCoordinatorDetach(&rl.coordinator, &rl.drivers[i]);
++				_rlDrainQueues();
++			}
++#endif
++		} else {
++#ifdef M_CORE_GB
++			if (i < 2) {
++				GBSIOSetDriver(&((struct GB*) rl.cores[i]->board)->sio, NULL);
++			}
++#endif
++		}
++	}
++	if (rl.coordinatorReady) {
++		GBASIOLockstepCoordinatorDeinit(&rl.coordinator);
++		rl.coordinatorReady = false;
++	}
++	memset(rl.drivers, 0, sizeof(rl.drivers));
++	memset(rl.users, 0, sizeof(rl.users));
++}
++
++/* A fresh cable for every console present: also the canonical state after loading a link state. */
++static void _rlAttachLink(void) {
++	_rlDetachLink();
++	if (rl.count < 2) {
++		return;
++	}
++	unsigned i;
++	if (_rlIsGBA()) {
++#ifdef M_CORE_GBA
++		GBASIOLockstepCoordinatorInit(&rl.coordinator);
++		rl.coordinatorReady = true;
++		for (i = 0; i < rl.count; ++i) {
++			rl.users[i].requestedId = (int) i;
++			rl.users[i].d.requestedId = _rlRequestedId;
++			rl.users[i].d.sleep = _rlSleep;
++			rl.users[i].d.wake = _rlWake;
++			GBASIOLockstepDriverCreate(&rl.drivers[i], &rl.users[i].d);
++			GBASIOLockstepCoordinatorAttach(&rl.coordinator, &rl.drivers[i]);
++			rl.cores[i]->setPeripheral(rl.cores[i], mPERIPH_GBA_LINK_PORT, &rl.drivers[i].d);
++		}
++#endif
++	} else {
++#ifdef M_CORE_GB
++		for (i = 0; i < 2; ++i) {
++			memset(&rl.gbNodes[i], 0, sizeof(rl.gbNodes[i]));
++			rl.gbNodes[i].index = (int) i;
++			rl.gbNodes[i].d.init = _rlGBNodeInit;
++			rl.gbNodes[i].d.deinit = _rlGBNodeDeinit;
++			rl.gbNodes[i].d.writeSB = _rlGBNodeWriteSB;
++			rl.gbNodes[i].d.writeSC = _rlGBNodeWriteSC;
++			GBSIOSetDriver(&((struct GB*) rl.cores[i]->board)->sio, &rl.gbNodes[i].d);
++		}
++#endif
++	}
++}
++
++/* ---- consoles ---- */
++
++static bool _rlCopyRom(void) {
++	if (rl.rom) {
++		return true;
++	}
++	/* The bytes the frontend handed over, as loaded: a small GBA image boots as multiboot without memory.rom. */
++	const void* source = data;
++	size_t size = data ? dataSize : 0;
++#ifdef M_CORE_GBA
++	if (!source && _rlIsGBA()) {
++		struct GBA* gba = core->board;
++		source = gba->memory.rom;
++		size = core->romSize(core);
++	}
++#endif
++#ifdef M_CORE_GB
++	if (!source && !_rlIsGBA()) {
++		struct GB* gb = core->board;
++		source = gb->memory.rom;
++		size = gb->pristineRomSize;
++	}
++#endif
++	if (!source || !size) {
++		return false;
++	}
++	rl.rom = malloc(size);
++	if (!rl.rom) {
++		return false;
++	}
++	memcpy(rl.rom, source, size);
++	rl.romSize = size;
++	return true;
++}
++
++static void _rlDestroyConsole(unsigned index) {
++	if (!index || !rl.cores[index]) {
++		return;
++	}
++	mCoreConfigDeinit(&rl.cores[index]->config);
++	rl.cores[index]->deinit(rl.cores[index]);
++	rl.cores[index] = NULL;
++	free(rl.video[index]);
++	rl.video[index] = NULL;
++}
++
++static bool _rlCreateConsole(unsigned index) {
++	struct mCore* clone = NULL;
++#ifdef M_CORE_GBA
++	if (_rlIsGBA()) {
++		clone = GBACoreCreate();
++	}
++#endif
++#ifdef M_CORE_GB
++	if (!_rlIsGBA()) {
++		clone = GBCoreCreate();
++	}
++#endif
++	if (!clone || !clone->init(clone)) {
++		free(clone);
++		return false;
++	}
++	mCoreInitConfig(clone, NULL);
++	mCoreLoadForeignConfig(clone, &core->config);
++	clone->opts = core->opts;
++	clone->opts.bios = NULL;
++	clone->opts.shader = NULL;
++	clone->opts.savegamePath = NULL;
++	clone->opts.savestatePath = NULL;
++	clone->opts.screenshotPath = NULL;
++	clone->opts.patchPath = NULL;
++	clone->opts.cheatsPath = NULL;
++	struct VFile* rom = VFileFromConstMemory(rl.rom, rl.romSize);
++	if (!rom || !clone->loadROM(clone, rom)) {
++		if (rom) {
++			rom->close(rom);
++		}
++		mCoreConfigDeinit(&clone->config);
++		clone->deinit(clone);
++		return false;
++	}
++#ifdef M_CORE_GBA
++	if (_rlIsGBA()) {
++		struct GBA* primary = core->board;
++		if (primary->biosVf) {
++			struct VFile* bios = VFileFromConstMemory(primary->memory.bios, GBA_SIZE_BIOS);
++			if (bios) {
++				clone->loadBIOS(clone, bios, 0);
++			}
++		}
++	}
++#endif
++#ifdef M_CORE_GB
++	if (!_rlIsGBA()) {
++		((struct GB*) clone->board)->model = ((struct GB*) core->board)->model;
++	}
++#endif
++	if (!rl.saves[index]) {
++		rl.saves[index] = anonymousMemoryMap(GBA_SIZE_FLASH1M);
++		memset(rl.saves[index], 0xFF, GBA_SIZE_FLASH1M);
++	}
++	clone->loadSave(clone, VFileFromMemory(rl.saves[index], GBA_SIZE_FLASH1M));
++	rl.video[index] = calloc(VIDEO_WIDTH_MAX * VIDEO_HEIGHT_MAX, sizeof(mColor));
++	if (!rl.video[index]) {
++		mCoreConfigDeinit(&clone->config);
++		clone->deinit(clone);
++		return false;
++	}
++	clone->setVideoBuffer(clone, rl.video[index], VIDEO_WIDTH_MAX);
++	clone->setAudioBufferSize(clone, _rlIsGBA() ? GBA_AUDIO_CHUNK_FRAMES : GB_SAMPLES);
++	clone->reset(clone);
++	rl.cores[index] = clone;
++	return true;
++}
++
++static void _rlAnnounceGeometry(void) {
++	struct retro_system_av_info info;
++	retro_get_system_av_info(&info);
++	environCallback(RETRO_ENVIRONMENT_SET_GEOMETRY, &info.geometry);
++}
++
++static struct mCore* _rlLocalCore(void) {
++	return rl.count > 1 && rl.local < rl.count && rl.cores[rl.local] ? rl.cores[rl.local] : core;
++}
++
++/* GB audio arrives through the AV stream: only the local console's is heard. */
++static void _rlRouteAudio(void) {
++	if (_rlIsGBA()) {
++		return;
++	}
++	unsigned i;
++	for (i = 0; i < rl.count; ++i) {
++		if (rl.cores[i]) {
++			rl.cores[i]->setAVStream(rl.cores[i], rl.cores[i] == _rlLocalCore() ? &stream : NULL);
++		}
++	}
++}
++
++RETRO_API unsigned retro_link_max_players(void) {
++	return _rlMaxPlayers();
++}
++
++RETRO_API unsigned retro_link_players(void) {
++	return rl.count ? rl.count : 1;
++}
++
++/* Sets how many consoles are linked. Consoles that stay keep running; new ones boot with their save. */
++RETRO_API bool retro_link_set_players(unsigned count) {
++	if (!core || count < 1 || count > _rlMaxPlayers()) {
++		return false;
++	}
++	if (deferredSetup) {
++		_doDeferredSetup();
++	}
++	if (!rl.count) {
++		rl.count = 1;
++		rl.cores[0] = core;
++	}
++	if (count == rl.count) {
++		return true;
++	}
++	if (count > 1 && !_rlCopyRom()) {
++		return false;
++	}
++	_rlDetachLink();
++	unsigned i;
++	for (i = count; i < RL_MAX; ++i) {
++		_rlDestroyConsole(i);
++	}
++	for (i = rl.count; i < count; ++i) {
++		if (!_rlCreateConsole(i)) {
++			unsigned j;
++			for (j = rl.count; j < i; ++j) {
++				_rlDestroyConsole(j);
++			}
++			_rlAttachLink();
++			return false;
++		}
++	}
++	rl.count = count;
++	if (rl.local >= count) {
++		rl.local = 0;
++	}
++	_rlAttachLink();
++	_rlRouteAudio();
++	_rlAnnounceGeometry();
++	return true;
++}
++
++/* The console this device plays: its picture, its sound and the save RAM the frontend reads and writes. */
++RETRO_API void retro_link_set_local(unsigned player) {
++	rl.local = player < RL_MAX ? player : 0;
++	_rlRouteAudio();
++	_rlAnnounceGeometry();
++}
++
++/* Every console's picture on one screen (players sharing one device), or only the local one. */
++RETRO_API void retro_link_set_grid(bool grid) {
++	rl.grid = grid;
++	_rlAnnounceGeometry();
++}
++
++/* Gives a console its player's save and turns that console on again with it. Console 0 is left running. */
++RETRO_API bool retro_link_load_save(unsigned player, const void* save, size_t size) {
++	if (player >= RL_MAX || !save || size > GBA_SIZE_FLASH1M) {
++		return false;
++	}
++	if (!player) {
++		memcpy(savedata, save, size);
++		return true;
++	}
++	if (!rl.saves[player]) {
++		rl.saves[player] = anonymousMemoryMap(GBA_SIZE_FLASH1M);
++	}
++	memset(rl.saves[player], 0xFF, GBA_SIZE_FLASH1M);
++	memcpy(rl.saves[player], save, size);
++	if (rl.cores[player]) {
++		rl.cores[player]->loadSave(rl.cores[player], VFileFromMemory(rl.saves[player], GBA_SIZE_FLASH1M));
++		rl.cores[player]->reset(rl.cores[player]);
++	}
++	return true;
++}
++
++static void _rlShutdown(void) {
++	_rlDetachLink();
++	unsigned i;
++	for (i = 1; i < RL_MAX; ++i) {
++		_rlDestroyConsole(i);
++		if (rl.saves[i]) {
++			mappedMemoryFree(rl.saves[i], GBA_SIZE_FLASH1M);
++		}
++	}
++	free(rl.rom);
++	free(rl.composite);
++	memset(&rl, 0, sizeof(rl));
++}
++
++static void _rlGeometry(unsigned* width, unsigned* height) {
++	struct mCore* local = _rlLocalCore();
++	local->currentVideoSize(local, width, height);
++	if (rl.count > 1 && rl.grid) {
++		*width *= 2;
++		if (rl.count > 2) {
++			*height *= 2;
++		}
++	}
++}
++
++static void _rlPresent(void) {
++	unsigned width, height;
++	struct mCore* local = _rlLocalCore();
++	local->currentVideoSize(local, &width, &height);
++	if (!rl.grid) {
++		const mColor* pixels = local == core ? outputBuffer : rl.video[rl.local];
++		videoCallback(pixels, width, height, VIDEO_WIDTH_MAX * sizeof(mColor));
++		return;
++	}
++	unsigned rows = rl.count > 2 ? 2 : 1;
++	size_t pitch = width * 2;
++	if (!rl.composite) {
++		rl.composite = malloc(VIDEO_WIDTH_MAX * 2 * VIDEO_HEIGHT_MAX * 2 * sizeof(mColor));
++		if (!rl.composite) {
++			return;
++		}
++	}
++	memset(rl.composite, 0, pitch * height * rows * sizeof(mColor));
++	unsigned i, y;
++	for (i = 0; i < rl.count; ++i) {
++		const mColor* pixels = i ? rl.video[i] : outputBuffer;
++		mColor* origin = rl.composite + (i / 2) * height * pitch + (i % 2) * width;
++		for (y = 0; y < height; ++y) {
++			memcpy(origin + y * pitch, pixels + y * VIDEO_WIDTH_MAX, width * sizeof(mColor));
++		}
++	}
++	videoCallback(rl.composite, width * 2, height * rows, pitch * sizeof(mColor));
++}
++
++static uint16_t _rlKeys(unsigned port) {
++	uint16_t keys = 0;
++	unsigned i;
++	int16_t mask = inputCallback(port, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK);
++	for (i = 0; i < sizeof(keymap) / sizeof(*keymap); ++i) {
++		keys |= ((mask >> keymap[i]) & 1) << i;
++	}
++	return keys;
++}
++
++/* One frame of every console. Returns false when retrolink is not driving this frame. */
++static bool _rlRunFrame(void) {
++	if (rl.count < 2) {
++		return false;
++	}
++	unsigned i;
++	uint32_t targets[RL_MAX];
++	for (i = 0; i < rl.count; ++i) {
++		rl.cores[i]->setKeys(rl.cores[i], _rlKeys(i));
++		targets[i] = rl.cores[i]->frameCounter(rl.cores[i]) + 1;
++	}
++	uint64_t loops = 0;
++	bool pending = true;
++	while (pending) {
++		pending = false;
++		bool ran = false;
++		for (i = 0; i < rl.count; ++i) {
++			if (rl.cores[i]->frameCounter(rl.cores[i]) >= targets[i]) {
++				/* A GBA ahead of the others still runs when awake: the coordinator puts it to sleep. */
++				if (!_rlIsGBA()) {
++					continue;
++				}
++			} else {
++				pending = true;
++			}
++			if (rl.users[i].asleep) {
++				continue;
++			}
++			rl.cores[i]->runLoop(rl.cores[i]);
++			ran = true;
++			++loops;
++		}
++		if (pending && (!ran || loops > RL_MAX_RUN_LOOPS)) {
++			mLOG(STATUS, ERROR, "retrolink stalled");
++			break;
++		}
++	}
++	_rlPresent();
++#ifdef M_CORE_GBA
++	if (_rlIsGBA()) {
++		struct mCore* local = _rlLocalCore();
++		struct mAudioBuffer* buffer = local->getAudioBuffer(local);
++		unsigned rate = local->audioSampleRate(local);
++		if (rate != audioConverter.inputRate) {
++			audioConverterReset(&audioConverter, rate);
++		}
++		while (true) {
++			size_t read = mAudioBufferRead(buffer, rl.audio, GBA_AUDIO_CHUNK_FRAMES);
++			if (!read) {
++				break;
++			}
++			size_t produced = audioConverterProcess(&audioConverter, rl.audio, read, audioSampleBuffer);
++			if (produced > 0) {
++				audioCallback(audioSampleBuffer, produced);
++			}
++		}
++		for (i = 0; i < rl.count; ++i) {
++			if (rl.cores[i] != local) {
++				mAudioBufferClear(rl.cores[i]->getAudioBuffer(rl.cores[i]));
++			}
++		}
++	}
++#endif
++	return true;
++}
++
++/* ---- state: every console, with its save, and a fresh cable after loading ---- */
++
++static struct VFile* _rlSaveConsole(struct mCore* target) {
++	struct VFile* vfm = VFileMemChunk(NULL, 0);
++	mCoreSaveStateNamed(target, vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
++	return vfm;
++}
++
++static size_t _rlSerialize(void* out, size_t size) {
++	size_t total = 8;
++	struct VFile* parts[RL_MAX] = { 0 };
++	unsigned i;
++	for (i = 0; i < rl.count; ++i) {
++		parts[i] = _rlSaveConsole(rl.cores[i]);
++		total += 4 + parts[i]->size(parts[i]);
++	}
++	if (out) {
++		if (size < total) {
++			total = 0;
++		} else {
++			uint8_t* cursor = out;
++			STORE_32LE(RL_STATE_MAGIC, 0, cursor);
++			STORE_32LE(rl.count, 4, cursor);
++			cursor += 8;
++			for (i = 0; i < rl.count; ++i) {
++				uint32_t length = parts[i]->size(parts[i]);
++				STORE_32LE(length, 0, cursor);
++				parts[i]->seek(parts[i], 0, SEEK_SET);
++				parts[i]->read(parts[i], cursor + 4, length);
++				cursor += 4 + length;
++			}
++		}
++	}
++	for (i = 0; i < rl.count; ++i) {
++		parts[i]->close(parts[i]);
++	}
++	return total;
++}
++
++static bool _rlIsLinkState(const void* state, size_t size) {
++	uint32_t magic;
++	if (size < 8) {
++		return false;
++	}
++	LOAD_32LE(magic, 0, state);
++	return magic == RL_STATE_MAGIC;
++}
++
++static bool _rlUnserialize(const void* state, size_t size) {
++	const uint8_t* cursor = state;
++	uint32_t count;
++	LOAD_32LE(count, 4, cursor);
++	if (count < 2 || count > _rlMaxPlayers() || !retro_link_set_players(count)) {
++		return false;
++	}
++	cursor += 8;
++	size -= 8;
++	unsigned i;
++	for (i = 0; i < count; ++i) {
++		uint32_t length;
++		if (size < 4) {
++			return false;
++		}
++		LOAD_32LE(length, 0, cursor);
++		if (size - 4 < length) {
++			return false;
++		}
++		struct VFile* vfm = VFileFromConstMemory(cursor + 4, length);
++		bool loaded = mCoreLoadStateNamed(rl.cores[i], vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
++		vfm->close(vfm);
++		if (!loaded) {
++			return false;
++		}
++		cursor += 4 + length;
++		size -= 4 + length;
++	}
++	/* The cable's own bookkeeping is not in a console's state: every device starts it anew here. */
++	_rlAttachLink();
++	return true;
++}
