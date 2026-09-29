@@ -4,7 +4,10 @@
 #   $C002 parallel rounds echoed (role 0, 16 = all), $C003 parallel NMIs on PC6 (role 1),
 #   $C004 phase: 1 serial done, 2 parallel done.
 # The screen (display off, backdrop only) shows the phase on a device: red, green once serial is done,
-# blue once role 0 finished the parallel rounds. Two devices both run role 0, so they stop at green.
+# blue once role 0 finished the parallel rounds. Two devices both run role 0 and each echoes the other's
+# identical rounds, so both turn blue.
+# Both wait for the partner first (each drives PC0 low, seen on the other's PC2): on devices the games run
+# before the cable is plugged.
 # Serial: 4800 bps with the receive NMI, each side sends 64 bytes i ^ $A5 back to back.
 # Parallel: role 0 drives PC0/PC1/PC4 (and PC6), role 1 echoes what arrives on its PC2/PC3/PC5 back on
 # PC0/PC1/PC4; role 0 waits for each echo, then drops PC6, which raises role 1's parallel NMI.
@@ -56,6 +59,10 @@ emit(0x21, *word(0xC000), 0x06, 16, 0xAF)   # ld hl,$C000; ld b,16; xor a
 label('clear'); emit(0x77, 0x23); jr(0x10, 'clear')   # ld (hl),a; inc hl; djnz
 backdrop(0x000F)
 emit(0x3E, 0x38, 0xD3, 0x05)           # serial on, 4800 bps, receive NMI
+emit(0x3E, 0x7E, 0xD3, 0x02)           # PC0 out, the rest in, no NMI
+emit(0xAF, 0xD3, 0x01)                 # PC0 low: this side is plugged in
+label('plug')                          # bytes sent before the partner is there are lost, as on hardware
+emit(0xDB, 0x01, 0xE6, 0x04); jr(0x20, 'plug')   # until the partner's PC0 pulls PC2 low
 emit(0x06, 64, 0x0E, 0x00)             # ld b,64; ld c,0
 label('send')
 emit(0xDB, 0x05, 0xE6, 0x01); jr(0x20, 'send')   # wait until the send buffer is free

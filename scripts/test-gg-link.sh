@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Two patched Genesis Plus GX link cores on this Mac, joined by an in-memory Netpacket cable, run a
 # Gear-to-Gear test ROM (generated here, CC0): serial bytes with the receive NMI, parallel echoes with
-# the PC6 NMI, a partner that joins late and one that leaves.
+# the PC6 NMI, a partner that joins late and one that leaves; then both again with the cable plugged in play.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${CORES_WORK:-$HOME/.cache/libretrodroid/cores}/genesis_plus_gx_link-host"
@@ -20,3 +20,4 @@ cp "$WORK/genesis_plus_gx_libretro.dylib" "$OUT/b.dylib" # A second file: a seco
 python3 "$ROOT/native/tests/link/make_gg_link_rom.py" "$OUT/linktest.gg" >/dev/null
 c++ -std=c++17 "$ROOT/native/tests/link/gg_link_test.cpp" -o "$OUT/gg-link"
 "$OUT/gg-link" "$OUT/a.dylib" "$OUT/b.dylib" "$OUT/linktest.gg"
+"$OUT/gg-link" "$OUT/a.dylib" "$OUT/b.dylib" "$OUT/linktest.gg" plugged-late

@@ -1,5 +1,6 @@
-// Usage: gg_link_test core_a core_b rom. Two Genesis Plus GX link cores joined by an in-memory Netpacket
-// cable run linktest.gg on one thread, like two devices; the second joins late so the first must wait.
+// Usage: gg_link_test core_a core_b rom [plugged-late]. Two Genesis Plus GX link cores joined by an in-memory
+// Netpacket cable run linktest.gg on one thread, like two devices; the second joins late so the first must wait.
+// plugged-late: both play before the cable is plugged, as on devices, where pairing takes a moment.
 #include <dlfcn.h>
 #include <chrono>
 #include <cstdio>
@@ -70,17 +71,25 @@ static void start(int i) {
 }
 static void frame(int i) { cur = &cores[i]; deliver(); cores[i].run(); }
 int main(int argc, char** argv) {
-    if (argc != 4) return 64;
+    if (argc != 4 && argc != 5) return 64;
+    const bool pluggedLate = argc == 5;
     romPath = argv[3];
     FILE* f = fopen(argv[3], "rb"); std::vector<unsigned char> rom(32768);
     if (!f || fread(rom.data(), 1, rom.size(), f) != rom.size()) return 66;
     fclose(f);
     load(0, argv[1], rom);
-    start(0);
-    for (int n = 0; n < 20; n++) frame(0);   // the partner is not there yet: frames repeat
-    int early = cores[0].repeated;
-    load(1, argv[2], rom);
-    start(1);
+    int early = 1;
+    if (pluggedLate) {
+        load(1, argv[2], rom);
+        for (int n = 0; n < 120; n++) { frame(0); frame(1); }
+        start(0); start(1);
+    } else {
+        start(0);
+        for (int n = 0; n < 20; n++) frame(0);   // the partner is not there yet: frames repeat
+        early = cores[0].repeated;
+        load(1, argv[2], rom);
+        start(1);
+    }
     for (int n = 0; n < 900; n++) { frame(0); frame(1); }
     auto* a = (unsigned char*)cores[0].mem(RETRO_MEMORY_SYSTEM_RAM);
     auto* b = (unsigned char*)cores[1].mem(RETRO_MEMORY_SYSTEM_RAM);

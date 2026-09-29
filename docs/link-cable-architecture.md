@@ -114,9 +114,11 @@ NMI) are unaffected by the latency; a serial round trip takes six frames.
 `scripts/test-gg-link.sh` runs two patched cores on the Mac joined by an
 in-memory cable with a generated test ROM (`make_gg_link_rom.py`): 64 serial
 bytes each way under the receive NMI, 16 parallel echo rounds, the PC6 NMI, a
-partner that joins late and one that leaves. The release script runs it.
-On a device the same ROM shows red, then green once the serial exchange is
-complete.
+partner that joins late and one that leaves; then both again with the cable
+plugged in while they already play, as on devices, where pairing takes a
+moment. The release script runs it. The ROM waits for its partner on the
+parallel pins before sending (a byte sent unplugged is lost, as on hardware):
+on a device it shows red until the other one is linked, then blue on both.
 
 ## Limits
 
