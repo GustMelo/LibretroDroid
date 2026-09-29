@@ -112,6 +112,8 @@ public class LibretroDroid {
     public static native void streamStop();
     /** Taps the audio as played, for readStreamAudio. */
     public static native void setStreamAudio(boolean enabled);
+    /** While the audio is tapped: true plays silence here, so the sound is heard only where it streams to. */
+    public static native void setStreamAudioOnly(boolean enabled);
     /** 48 kHz interleaved 16-bit stereo into a direct buffer; returns the frames written. */
     public static native int readStreamAudio(java.nio.ByteBuffer buffer, int frames);
 

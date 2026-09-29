@@ -372,16 +372,30 @@ class GLRetroView(
 
     /**
      * Streams the game at [width] x [height] (letterboxed) until [stopStream]: every frame to [sink], the sound
-     * through [readStreamAudio]. The screen keeps playing. Same contract as the iOS player's startStream.
+     * through [readStreamAudio]. The screen keeps playing; with [playHere] false it goes silent, so the sound is heard
+     * only where it streams to. Same contract as the iOS player's startStream.
      */
-    fun startStream(width: Int, height: Int, sink: StreamSink) = queueEvent {
+    fun startStream(width: Int, height: Int, sink: StreamSink, playHere: Boolean = true) = queueEvent {
         stopStreamOnRenderThread()
         streamWidth = width
         streamHeight = height
         streamBuffer = ByteBuffer.allocateDirect(width * height * 4)
         streamSink = sink
         LibretroDroid.setStreamAudio(true)
+        LibretroDroid.setStreamAudioOnly(!playHere)
     }
+
+    /**
+     * Only the sound, through [readStreamAudio], until [stopStreamAudio]: for a stream that takes its picture from
+     * this view some other way (drawn into a virtual display). [playHere] as in [startStream].
+     */
+    fun startStreamAudio(playHere: Boolean = true) {
+        LibretroDroid.setStreamAudio(true)
+        LibretroDroid.setStreamAudioOnly(!playHere)
+    }
+
+    /** Ends [startStreamAudio]; this device plays the sound again. */
+    fun stopStreamAudio() = LibretroDroid.setStreamAudio(false)
 
     fun stopStream() = queueEvent { stopStreamOnRenderThread() }
 

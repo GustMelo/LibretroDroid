@@ -762,6 +762,15 @@ JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setStreamA
         streamAudioPhase = 0.0;
     }
     if (enabled) setAudioTap(onStreamAudio, nullptr); else setAudioTap(nullptr, nullptr);
+    if (!enabled) setAudioTapOnly(false);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setStreamAudioOnly(
+    JNIEnv* env,
+    jclass obj,
+    jboolean enabled
+) {
+    setAudioTapOnly(enabled);
 }
 
 JNIEXPORT jint JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_readStreamAudio(

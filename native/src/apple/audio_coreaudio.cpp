@@ -17,6 +17,7 @@
 
 #include <AudioToolbox/AudioToolbox.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -70,6 +71,7 @@ constexpr double OUTPUT_SAMPLE_RATE = 48000.0;
 std::mutex tapLock;
 AudioTap tap = nullptr;
 void *tapContext = nullptr;
+std::atomic<bool> tapOnly {false};
 constexpr unsigned LOW_LATENCY_VIDEO_FRAMES = 4;
 }
 
@@ -139,6 +141,7 @@ struct Audio::Impl {
         // Never wait on the render thread: a tap being replaced just skips one buffer.
         std::unique_lock<std::mutex> lock(tapLock, std::try_to_lock);
         if (lock.owns_lock() && tap) tap(tapContext, output, static_cast<size_t>(numFrames));
+        if (tapOnly.load(std::memory_order_relaxed)) std::fill_n(output, static_cast<size_t>(numFrames) * 2, int16_t {0});
     }
 
     AudioComponentInstance unit = nullptr;
@@ -177,6 +180,8 @@ void setAudioTap(AudioTap audio, void *context) {
     tap = audio;
     tapContext = context;
 }
+
+void setAudioTapOnly(bool onlyTap) { tapOnly = onlyTap; }
 
 int32_t audioTapSampleRate() { return static_cast<int32_t>(OUTPUT_SAMPLE_RATE); }
 }

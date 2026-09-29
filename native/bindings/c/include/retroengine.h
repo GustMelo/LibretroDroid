@@ -105,6 +105,9 @@ void re_stream_stop(void);
 /* Game audio as played: 48 kHz interleaved stereo, called on the audio thread. NULL removes it. */
 typedef void (*re_audio_fn)(void *context, const int16_t *frames, size_t count);
 void re_set_audio_tap(re_audio_fn audio, void *context);
+/* While tapped: true plays silence on this device, so the sound is heard only where it streams to. Removing the
+ * tap turns it off. */
+void re_set_audio_tap_only(bool tap_only);
 
 #ifdef __cplusplus
 }

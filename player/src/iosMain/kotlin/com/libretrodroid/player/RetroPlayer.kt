@@ -39,6 +39,7 @@ import com.libretrodroid.engine.native.re_serialize
 import com.libretrodroid.engine.native.re_serialize_sram
 import com.libretrodroid.engine.native.re_set_buttons
 import com.libretrodroid.engine.native.re_set_audio_tap
+import com.libretrodroid.engine.native.re_set_audio_tap_only
 import com.libretrodroid.engine.native.re_set_motion
 import com.libretrodroid.engine.native.re_set_multitap
 import com.libretrodroid.engine.native.re_stream_frame
@@ -206,12 +207,18 @@ class RetroPlayer(
     fun setMultitap(enabled: Boolean): Boolean = onRenderThread { re_set_multitap(enabled) }
 
     /** Streams at [width] x [height] (letterboxed) until [stopStream]. The screen keeps playing too. */
-    fun startStream(width: Int, height: Int, sink: RetroStreamSink) = onRenderThread {
+    fun startStream(width: Int, height: Int, sink: RetroStreamSink) = startStream(width, height, sink, playHere = true)
+
+    /**
+     * [startStream]; with [playHere] false this device goes silent, so the sound is heard only where it streams to.
+     */
+    fun startStream(width: Int, height: Int, sink: RetroStreamSink, playHere: Boolean) = onRenderThread {
         stopStreamOnRenderThread()
         streamSize = width to height
         this.sink = sink
         val ref = StableRef.create(this).also { sinkRef = it }
         re_set_audio_tap(streamAudio, ref.asCPointer())
+        re_set_audio_tap_only(!playHere)
     }
 
     fun stopStream() = onRenderThread { stopStreamOnRenderThread() }

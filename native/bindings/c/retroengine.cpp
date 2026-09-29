@@ -351,5 +351,9 @@ void re_stream_frame(int width, int height, re_video_fn video, void *context) {
 
 void re_stream_stop(void) { stream.release(); }
 
-void re_set_audio_tap(re_audio_fn audio, void *context) { setAudioTap(audio, context); }
+void re_set_audio_tap(re_audio_fn audio, void *context) {
+    setAudioTap(audio, context);
+    if (!audio) setAudioTapOnly(false);
+}
+void re_set_audio_tap_only(bool tap_only) { setAudioTapOnly(tap_only); }
 }

@@ -15,6 +15,7 @@
  *     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <memory>
@@ -33,6 +34,7 @@ namespace {
 std::mutex tapLock;
 AudioTap tap = nullptr;
 void *tapContext = nullptr;
+std::atomic<bool> tapOnly {false};
 // The device's output rate: Oboe plays at its native rate and the resampler above converts to it.
 std::atomic<int32_t> tapSampleRate {48000};
 }
@@ -128,6 +130,7 @@ struct Audio::Impl : public oboe::AudioStreamDataCallback, oboe::AudioStreamErro
         // Never wait on the audio thread: a tap being replaced just skips one buffer.
         std::unique_lock<std::mutex> lock(tapLock, std::try_to_lock);
         if (lock.owns_lock() && tap) tap(tapContext, outputArray, static_cast<size_t>(numFrames));
+        if (tapOnly.load(std::memory_order_relaxed)) std::fill_n(outputArray, static_cast<size_t>(numFrames) * 2, int16_t {0});
 
         return oboe::DataCallbackResult::Continue;
     }
@@ -186,6 +189,8 @@ void setAudioTap(AudioTap audio, void *context) {
     tap = audio;
     tapContext = context;
 }
+
+void setAudioTapOnly(bool onlyTap) { tapOnly = onlyTap; }
 
 int32_t audioTapSampleRate() { return tapSampleRate; }
 }
