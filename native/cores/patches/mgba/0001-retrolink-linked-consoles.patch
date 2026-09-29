@@ -166,10 +166,10 @@ index abed4cc7c..e50b8f4f8 100644
  			break;
 diff --git a/src/platform/libretro/retrolink.inl b/src/platform/libretro/retrolink.inl
 new file mode 100644
-index 000000000..af2971b3e
+index 000000000..b89fdd4f2
 --- /dev/null
 +++ b/src/platform/libretro/retrolink.inl
-@@ -0,0 +1,713 @@
+@@ -0,0 +1,724 @@
 +/* retrolink: several consoles linked by an emulated cable inside one libretro core.
 + *
 + * Console 0 is the core the frontend loaded; consoles 1..N-1 are clones of the same ROM (and GBA BIOS)
@@ -380,7 +380,10 @@ index 000000000..af2971b3e
 +			GBASIOLockstepCoordinatorAttach(&rl.coordinator, &rl.drivers[i]);
 +			rl.cores[i]->setPeripheral(rl.cores[i], mPERIPH_GBA_LINK_PORT, &rl.drivers[i].d);
 +		}
++		bool busy[RL_MAX] = { 0 };
 +		for (i = 0; i < rl.count; ++i) {
++			struct GBASIO* sio = &((struct GBA*) rl.cores[i]->board)->sio;
++			busy[i] = sio->mode == GBA_SIO_MULTI && GBASIOMultiplayerIsBusy(sio->siocnt);
 +			_rlRefreshSerial(rl.cores[i]->board);
 +		}
 +		/* Every console's view of the others' modes, and so SD ("everyone ready"), would otherwise wait for the
@@ -410,6 +413,14 @@ index 000000000..af2971b3e
 +			if (sio->mode == GBA_SIO_MULTI) {
 +				sio->siocnt = GBASIOMultiplayerSetReady(sio->siocnt, ready);
 +				sio->rcnt = GBASIORegisterRCNTSetSd(sio->rcnt, ready);
++			}
++		}
++		/* A transfer in flight when the state was saved dies with the old cable: the parent starts it again on this
++		 * one, as its game did, so a rebuild (a player joining, a state loaded) loses no word, the same everywhere. */
++		for (i = 0; i < rl.count; ++i) {
++			if (busy[i] && players[i] && players[i]->playerId == 0) {
++				struct GBA* gba = rl.cores[i]->board;
++				GBASIOWriteSIOCNT(&gba->sio, gba->sio.siocnt | 0x0080);
 +			}
 +		}
 +#endif

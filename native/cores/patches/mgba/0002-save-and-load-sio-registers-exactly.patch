@@ -1,0 +1,28 @@
+diff --git a/src/gba/io.c b/src/gba/io.c
+index 658036e4c..926c66128 100644
+--- a/src/gba/io.c
++++ b/src/gba/io.c
+@@ -1009,6 +1009,8 @@ void GBAIOSerialize(struct GBA* gba, struct GBASerializedState* state) {
+ 			STORE_16(reg, i, state->io);
+ 		}
+ 	}
++	// Not a readable register, but the word this console sends in the next multiplayer transfer.
++	STORE_16(gba->memory.io[GBA_REG(SIOMLT_SEND)], GBA_REG_SIOMLT_SEND, state->io);
+ 
+ 	for (i = 0; i < 4; ++i) {
+ 		STORE_16(gba->memory.io[(GBA_REG_DMA0CNT_LO + i * 12) >> 1], (GBA_REG_DMA0CNT_LO + i * 12), state->io);
+@@ -1027,6 +1029,14 @@ void GBAIODeserialize(struct GBA* gba, const struct GBASerializedState* state) {
+ 	LOAD_16(gba->memory.io[GBA_REG(SOUNDCNT_X)], GBA_REG_SOUNDCNT_X, state->io);
+ 	GBAAudioWriteSOUNDCNT_X(&gba->audio, gba->memory.io[GBA_REG(SOUNDCNT_X)]);
+ 
++	// The SIO registers below are written through the serial mode, and RCNT keeps bits no write sets: take
++	// both from this state, not from the console as it was before loading, or the same state loads differently.
++	// SIOMLT_SEND (SIODATA8) is not replayed below at all: load it as saved.
++	LOAD_16(gba->sio.siocnt, GBA_REG_SIOCNT, state->io);
++	LOAD_16(gba->sio.rcnt, GBA_REG_RCNT, state->io);
++	GBASIOWriteRCNT(&gba->sio, gba->sio.rcnt);
++	LOAD_16(gba->memory.io[GBA_REG(SIOMLT_SEND)], GBA_REG_SIOMLT_SEND, state->io);
++
+ 	int i;
+ 	for (i = 0; i < GBA_REG_MAX; i += 2) {
+ 		if (_isWSpecialRegister[i >> 1]) {

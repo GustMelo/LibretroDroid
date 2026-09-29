@@ -63,7 +63,9 @@ int main(int argc, char** argv) {
     Core a = open(argv[1], rom);
     frames(a, 30, 1);
     cur = &a; if (!a.setPlayers(players)) { printf("set_players failed\n"); return 4; }
-    // The netplay host canonicalizes: serialize, load its own state, send that state.
+    // The host plays on the new cable while the joiner connects; then it canonicalizes: serialize, load its own
+    // state, send that state. Loading must not depend on how the host's consoles were before (their serial registers).
+    frames(a, 60, 5);
     auto join = state(a); cur = &a; a.unser(join.data(), join.size());
     Core b = open(argv[2], rom);
     cur = &b; if (!b.unser(join.data(), join.size())) { printf("join unserialize failed\n"); return 5; }

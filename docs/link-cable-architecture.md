@@ -45,7 +45,14 @@ Frontend API (optional symbols; cores without them report 1 player):
 A state (`retro_serialize`) holds every console with its save. Loading one
 rebuilds the cable, which is not part of a console's state; the netplay host
 loads its own state before sending it, so every device starts the cable from
-the same point and stays byte-identical.
+the same point and stays byte-identical. A parent whose Multi-Pak transfer was
+in flight starts it again on the new cable, so a rebuild loses no word.
+
+Upstream mGBA loads a GBA state differently depending on the console it loads
+into: SIO registers are replayed through the serial mode the console had before
+loading, and SIOMLT_SEND is neither saved nor loaded. A host that played on the
+cable before sending its state then diverged from the joiner a few frames later.
+`patches/mgba/0002` saves and loads them exactly.
 
 Netplay (protocol 8): the joiner's `Hello` carries its save; the host gives it
 a console with that save (`NetplayEmulator.linkConsoles`). When a player leaves
@@ -60,7 +67,8 @@ same-device mode, where each physical controller plays its own port.
 Boys with a generated serial ROM (`make_gb_link_rom.py`) and 2, 3 and 4 GBAs
 with a generated Multi-Pak ROM (`gba_link4.c`, built by clang alone): every
 console must exchange its words correctly, and a second core instance that
-joined from the first's state must stay byte-identical. The release script
+joined from the first's state, after the first played a second on the new
+cable, must stay byte-identical. The release script
 runs it.
 
 ## Pairing for the Game Gear (KMP, shared)
