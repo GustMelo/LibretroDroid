@@ -37,7 +37,8 @@ unsigned FPSSync::advanceFrames() {
 FPSSync::FPSSync(double contentRefreshRate, double screenRefreshRate) {
     this->contentRefreshRate = contentRefreshRate;
     this->screenRefreshRate = screenRefreshRate;
-    this->useVSync = std::abs(contentRefreshRate - screenRefreshRate) < FPS_TOLERANCE;
+    this->ratesMatch = std::abs(contentRefreshRate - screenRefreshRate) < FPS_TOLERANCE;
+    this->useVSync = ratesMatch;
     this->sampleInterval = std::chrono::microseconds((long) ((1000000L / contentRefreshRate)));
     reset();
 }
@@ -45,6 +46,11 @@ FPSSync::FPSSync(double contentRefreshRate, double screenRefreshRate) {
 void FPSSync::start() {
     LOGI("Starting game with fps %f on a screen with refresh rate %f. Using vsync: %d", contentRefreshRate, screenRefreshRate, useVSync);
     lastFrame = std::chrono::steady_clock::now();
+}
+
+void FPSSync::setVSyncAllowed(bool allowed) {
+    useVSync = ratesMatch && allowed;
+    reset();
 }
 
 void FPSSync::reset() {

@@ -135,6 +135,12 @@ float re_effective_speed(void);
 
 /* Run-ahead: show the frame `frames` ahead (0..6) to remove the games' built-in input lag; 0 turns it off. */
 void re_set_run_ahead(unsigned frames);
+/** How loud the game plays on this device, 0 (silent) to 1; a stream to another screen keeps its full volume. */
+void re_set_audio_volume(float volume);
+/** False paces frames by the clock instead of the display's refresh, even when both rates match. */
+void re_set_vsync(bool enabled);
+/** Whether a late frame is made up by running two and drawing the second (clock pacing only). */
+void re_set_frame_skip(bool enabled);
 
 /* Rewind history kept within budget_bytes; 0 turns it off. */
 void re_set_rewind(size_t budget_bytes);

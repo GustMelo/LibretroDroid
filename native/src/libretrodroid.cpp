@@ -553,7 +553,7 @@ void LibretroDroid::step() {
         if (fpsSync) {
             unsigned requestedFrames = fpsSync->advanceFrames();
 
-            frames = std::min(requestedFrames, 2u);
+            frames = std::min(requestedFrames, frameSkip ? 2u : 1u);
         }
 
         runFrames(frames);
@@ -686,6 +686,23 @@ void LibretroDroid::setRunAhead(unsigned frames) {
     std::lock_guard<std::mutex> lock(coreLock);
     runAhead = std::min(frames, MAX_RUN_AHEAD);
     runAheadBroken = false;
+}
+
+void LibretroDroid::setAudioVolume(float volume) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    audioVolume = std::clamp(volume, 0.0f, 1.0f);
+    if (audio) audio->setVolume(audioVolume);
+}
+
+void LibretroDroid::setVSync(bool enabled) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    vsync = enabled;
+    if (fpsSync) fpsSync->setVSyncAllowed(enabled);
+}
+
+void LibretroDroid::setFrameSkip(bool enabled) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    frameSkip = enabled;
 }
 
 bool LibretroDroid::runAheadAllowedLocked() const {
@@ -1157,6 +1174,7 @@ void LibretroDroid::afterGameLoad() {
     core->retro_get_system_av_info(&system_av_info);
 
     fpsSync = std::make_unique<FPSSync>(system_av_info.timing.fps, screenRefreshRate);
+    fpsSync->setVSyncAllowed(vsync);
     contentFps = system_av_info.timing.fps;
 
     struct retro_system_info system_info {};
@@ -1170,6 +1188,7 @@ void LibretroDroid::afterGameLoad() {
         system_av_info.timing.fps,
         preferLowLatencyAudio
     );
+    audio->setVolume(audioVolume);
 
     updateAudioSampleRateMultiplier();
 

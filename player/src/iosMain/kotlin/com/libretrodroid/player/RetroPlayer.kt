@@ -53,7 +53,10 @@ import com.libretrodroid.engine.native.re_unserialize_sram
 import com.libretrodroid.engine.native.re_set_speed
 import com.libretrodroid.engine.native.re_effective_speed
 import com.libretrodroid.engine.native.re_set_rewind
+import com.libretrodroid.engine.native.re_set_audio_volume
+import com.libretrodroid.engine.native.re_set_frame_skip
 import com.libretrodroid.engine.native.re_set_run_ahead
+import com.libretrodroid.engine.native.re_set_vsync
 import com.libretrodroid.engine.native.re_set_rewinding
 import com.libretrodroid.engine.native.re_rewind_seconds
 import com.libretrodroid.engine.native.re_sensors_requested
@@ -373,6 +376,15 @@ class RetroPlayer(
 
     /** Run-ahead frames (0..6): the picture shows that many frames ahead, removing the games' own input lag. */
     fun setRunAhead(frames: Int) = re_set_run_ahead(frames.coerceAtLeast(0).toUInt())
+
+    /** How loud the game plays on this device, 0 (silent) to 1; a stream to another screen keeps its full volume. */
+    fun setAudioVolume(volume: Float) = re_set_audio_volume(volume.coerceIn(0f, 1f))
+
+    /** False paces frames by the clock instead of the display's refresh, even when both rates match. */
+    fun setVSync(enabled: Boolean) = re_set_vsync(enabled)
+
+    /** Whether a late frame is made up by running two and drawing the second (only when the clock paces frames). */
+    fun setFrameSkip(enabled: Boolean) = re_set_frame_skip(enabled)
 
     /** Keeps the last [budgetBytes] of play to rewind through; 0 turns it off and frees it. */
     fun setRewind(budgetBytes: Long) = re_set_rewind(budgetBytes.coerceAtLeast(0).toULong())

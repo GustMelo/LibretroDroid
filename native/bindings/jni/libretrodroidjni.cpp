@@ -844,6 +844,18 @@ JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setRunAhea
     LibretroDroid::getInstance().setRunAhead(frames > 0 ? static_cast<unsigned>(frames) : 0);
 }
 
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setAudioVolume(JNIEnv*, jclass, jfloat volume) {
+    LibretroDroid::getInstance().setAudioVolume(volume);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setVSync(JNIEnv*, jclass, jboolean enabled) {
+    LibretroDroid::getInstance().setVSync(enabled);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setFrameSkip(JNIEnv*, jclass, jboolean enabled) {
+    LibretroDroid::getInstance().setFrameSkip(enabled);
+}
+
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setRewind(JNIEnv*, jclass, jlong budgetBytes) {
     LibretroDroid::getInstance().setRewind(budgetBytes > 0 ? static_cast<size_t>(budgetBytes) : 0);
 }

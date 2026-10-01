@@ -131,6 +131,7 @@ struct Audio::Impl : public oboe::AudioStreamDataCallback, oboe::AudioStreamErro
         std::unique_lock<std::mutex> lock(tapLock, std::try_to_lock);
         if (lock.owns_lock() && tap) tap(tapContext, outputArray, static_cast<size_t>(numFrames));
         if (tapOnly.load(std::memory_order_relaxed)) std::fill_n(outputArray, static_cast<size_t>(numFrames) * 2, int16_t {0});
+        else applyVolume(outputArray, static_cast<size_t>(numFrames) * 2, volume.load(std::memory_order_relaxed));
 
         return oboe::DataCallbackResult::Continue;
     }
@@ -163,6 +164,7 @@ struct Audio::Impl : public oboe::AudioStreamDataCallback, oboe::AudioStreamErro
     double baseConversionFactor = 1.0;
     double framesToSubmit = 0.0;
     double playbackSpeed = 1.0;
+    std::atomic<float> volume {1.0f};
 
     AudioLatencySettings audioLatencySettings {};
 };
@@ -182,6 +184,10 @@ void Audio::write(const int16_t *data, size_t frames) {
 
 void Audio::setPlaybackSpeed(const double newPlaybackSpeed) {
     impl->playbackSpeed = newPlaybackSpeed;
+}
+
+void Audio::setVolume(float newVolume) {
+    impl->volume = newVolume;
 }
 
 void setAudioTap(AudioTap audio, void *context) {

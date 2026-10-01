@@ -142,6 +142,7 @@ struct Audio::Impl {
         std::unique_lock<std::mutex> lock(tapLock, std::try_to_lock);
         if (lock.owns_lock() && tap) tap(tapContext, output, static_cast<size_t>(numFrames));
         if (tapOnly.load(std::memory_order_relaxed)) std::fill_n(output, static_cast<size_t>(numFrames) * 2, int16_t {0});
+        else applyVolume(output, static_cast<size_t>(numFrames) * 2, volume.load(std::memory_order_relaxed));
     }
 
     AudioComponentInstance unit = nullptr;
@@ -152,6 +153,7 @@ struct Audio::Impl {
     double baseConversionFactor;
     double framesToSubmit = 0.0;
     std::atomic<double> playbackSpeed {1.0};
+    std::atomic<float> volume {1.0f};
 };
 
 Audio::Audio(int32_t sampleRate, double refreshRate, bool)
@@ -173,6 +175,10 @@ void Audio::write(const int16_t *data, size_t frames) {
 
 void Audio::setPlaybackSpeed(double newPlaybackSpeed) {
     impl->playbackSpeed = newPlaybackSpeed;
+}
+
+void Audio::setVolume(float newVolume) {
+    impl->volume = newVolume;
 }
 
 void setAudioTap(AudioTap audio, void *context) {

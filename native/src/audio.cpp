@@ -38,6 +38,13 @@ double AudioRateControl::update(double capacityFrames, double availableFrames, d
     return 1.0 - (finalAdjustment);
 }
 
+void applyVolume(int16_t *data, size_t samples, float volume) {
+    if (volume >= 1.0f) return;
+    float gain = std::max(volume, 0.0f);
+    gain *= gain;
+    for (size_t i = 0; i < samples; i++) data[i] = static_cast<int16_t>(static_cast<float>(data[i]) * gain);
+}
+
 int32_t audioBufferSize(int32_t inputSampleRate, double contentRefreshRate, unsigned bufferSizeInVideoFrames) {
     double maxLatency = std::max((bufferSizeInVideoFrames / contentRefreshRate) * 1000, 32.0);
     LOGI("Average audio latency set to: %f ms", maxLatency * 0.5);

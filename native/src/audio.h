@@ -33,6 +33,8 @@ public:
 
     void write(const int16_t *data, size_t frames);
     void setPlaybackSpeed(double newPlaybackSpeed);
+    /** How loud the game plays on this device, 0 (silent) to 1; what an audio tap receives keeps its full volume. */
+    void setVolume(float newVolume);
 
     struct Impl;
 
@@ -52,6 +54,9 @@ private:
 
     double errorIntegral = 0.0;
 };
+
+/** Scales [samples] interleaved samples in place by a volume of 0..1, squared so the control feels even; 1 leaves them alone. */
+void applyVolume(int16_t *data, size_t samples, float volume);
 
 int32_t audioBufferSize(int32_t inputSampleRate, double contentRefreshRate, unsigned bufferSizeInVideoFrames);
 }

@@ -376,6 +376,12 @@ float re_effective_speed(void) { return LibretroDroid::getInstance().effectiveSp
 
 void re_set_run_ahead(unsigned frames) { LibretroDroid::getInstance().setRunAhead(frames); }
 
+void re_set_audio_volume(float volume) { LibretroDroid::getInstance().setAudioVolume(volume); }
+
+void re_set_vsync(bool enabled) { LibretroDroid::getInstance().setVSync(enabled); }
+
+void re_set_frame_skip(bool enabled) { LibretroDroid::getInstance().setFrameSkip(enabled); }
+
 void re_set_rewind(size_t budget_bytes) { LibretroDroid::getInstance().setRewind(budget_bytes); }
 
 void re_set_rewinding(bool rewinding) { LibretroDroid::getInstance().setRewinding(rewinding); }

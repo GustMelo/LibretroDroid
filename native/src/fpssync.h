@@ -34,11 +34,14 @@ public:
     unsigned advanceFrames();
     void wait();
     double getTimeStretchFactor();
+    /** False paces frames by the clock even when the content and the display refresh at the same rate. */
+    void setVSyncAllowed(bool allowed);
 private:
 
     double screenRefreshRate;
     double contentRefreshRate;
     bool useVSync;
+    bool ratesMatch;
     const double FPS_TOLERANCE = 5;
 
     const TimePoint MIN_TIME = TimePoint::min();

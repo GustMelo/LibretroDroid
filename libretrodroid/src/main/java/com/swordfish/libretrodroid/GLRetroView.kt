@@ -108,6 +108,15 @@ class GLRetroView(
     /** Run-ahead frames (0..6): the picture shows that many frames ahead, removing the games' own input lag. */
     var runAhead: Int by Delegates.observable(0) { _, _, value -> LibretroDroid.setRunAhead(value) }
 
+    /** How loud the game plays on this device, 0 (silent) to 1; a stream to another screen keeps its full volume. */
+    var audioVolume: Float by Delegates.observable(1f) { _, _, value -> LibretroDroid.setAudioVolume(value) }
+
+    /** False paces frames by the clock instead of the display's refresh, even when both rates match. */
+    var vsync: Boolean by Delegates.observable(true) { _, _, value -> LibretroDroid.setVSync(value) }
+
+    /** Whether a late frame is made up by running two and drawing the second (only when the clock paces frames). */
+    var frameSkip: Boolean by Delegates.observable(true) { _, _, value -> LibretroDroid.setFrameSkip(value) }
+
     /** Keeps the last [budgetBytes] of play to rewind through; 0 turns rewind off and frees it. */
     fun setRewind(budgetBytes: Long) = LibretroDroid.setRewind(budgetBytes)
 

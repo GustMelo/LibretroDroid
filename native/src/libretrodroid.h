@@ -160,6 +160,16 @@ public:
      */
     void setRunAhead(unsigned frames);
 
+    /** How loud the game plays on this device, 0 (silent) to 1. What is streamed to another screen keeps its full volume. */
+    void setAudioVolume(float volume);
+    /**
+     * True (the default) paces frames by the display's refresh when it matches the console's. False paces them by the
+     * clock, which lets a device that can't keep up skip a frame ([setFrameSkip]) instead of slowing the game down.
+     */
+    void setVSync(bool enabled);
+    /** Whether a late frame is made up by running two and drawing the second; only when frames are paced by the clock. */
+    void setFrameSkip(bool enabled);
+
     /** Records the last [budgetBytes] of play to step back through; 0 turns rewind off and frees it. */
     void setRewind(size_t budgetBytes);
     /** While true every displayed frame steps one recorded state back instead of playing. */
@@ -242,6 +252,9 @@ private:
     std::string libraryName;
     bool audioEnabled = true;
     bool preferLowLatencyAudio = false;
+    float audioVolume = 1.0f;
+    bool vsync = true;
+    bool frameSkip = true;
     bool rumbleEnabled = false;
 
     ShaderManager::Config fragmentShaderConfig = ShaderManager::Config {
