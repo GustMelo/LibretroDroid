@@ -7,6 +7,7 @@ import com.libretrodroid.netplay.LanDiscovery.Companion.KEY_STARTED
 import com.libretrodroid.netplay.LanDiscovery.Companion.SERVICE_TYPE
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.convert
@@ -40,17 +41,32 @@ class BonjourDiscovery : LanDiscovery {
     private var browser: NSNetServiceBrowser? = null
     private val resolving = mutableListOf<NSNetService>()
     private var onFound: ((LanGame) -> Unit)? = null
+    private var onLost: ((String) -> Unit)? = null
+    /** Session announced under each service name still on the network: a loss only carries the name. */
+    private val sessions = mutableMapOf<String, String>()
 
     private val delegate = object : NSObject(), NSNetServiceBrowserDelegateProtocol, NSNetServiceDelegateProtocol {
+        @ObjCSignatureOverride
         override fun netServiceBrowser(browser: NSNetServiceBrowser, didFindService: NSNetService, moreComing: Boolean) {
             resolving += didFindService
             didFindService.delegate = this
             didFindService.resolveWithTimeout(3.0)
         }
 
+        @ObjCSignatureOverride
+        override fun netServiceBrowser(browser: NSNetServiceBrowser, didRemoveService: NSNetService, moreComing: Boolean) {
+            // Also stops a resolve still under way: reporting it later would leave it listed forever.
+            val name = didRemoveService.name
+            resolving.filter { it.name == name }.forEach { it.stop(); resolving -= it }
+            sessions.remove(name)?.let { onLost?.invoke(it) }
+        }
+
         override fun netServiceDidResolveAddress(sender: NSNetService) {
-            resolving -= sender
-            sender.toLanGame()?.let { game -> onFound?.invoke(game) }
+            if (!resolving.remove(sender)) return
+            val game = sender.toLanGame() ?: return
+            val previous = sessions.put(sender.name, game.sessionId)
+            if (previous != null && previous != game.sessionId) onLost?.invoke(previous)
+            onFound?.invoke(game)
         }
 
         override fun netService(sender: NSNetService, didNotResolve: Map<Any?, *>) {
@@ -86,8 +102,9 @@ class BonjourDiscovery : LanDiscovery {
         published = null
     }
 
-    override fun discover(onFound: (LanGame) -> Unit) = onMain {
+    override fun discover(onLost: (String) -> Unit, onFound: (LanGame) -> Unit) = onMain {
         this.onFound = onFound
+        this.onLost = onLost
         val browser = NSNetServiceBrowser()
         browser.delegate = delegate
         browser.searchForServicesOfType("$SERVICE_TYPE.", inDomain = "local.")
@@ -102,6 +119,8 @@ class BonjourDiscovery : LanDiscovery {
         resolving.forEach { it.stop() }
         resolving.clear()
         onFound = null
+        onLost = null
+        sessions.clear()
     }
 
     private fun NSNetService.toLanGame(): LanGame? {

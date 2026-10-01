@@ -10,6 +10,7 @@ import com.libretrodroid.netplay.LanDiscovery.Companion.KEY_NAME
 import com.libretrodroid.netplay.LanDiscovery.Companion.KEY_SESSION
 import com.libretrodroid.netplay.LanDiscovery.Companion.KEY_STARTED
 import com.libretrodroid.netplay.LanDiscovery.Companion.SERVICE_TYPE
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -19,6 +20,8 @@ class NsdDiscovery(context: Context) : LanDiscovery {
     private val resolver = Executors.newSingleThreadExecutor()
     private var registration: NsdManager.RegistrationListener? = null
     private var discovery: NsdManager.DiscoveryListener? = null
+    /** Session announced under each service name still on the network: a loss only carries the name. */
+    private val sessions = ConcurrentHashMap<String, String>()
 
     override fun advertise(game: LanGame) {
         val info = NsdServiceInfo().apply {
@@ -50,10 +53,21 @@ class NsdDiscovery(context: Context) : LanDiscovery {
         registration = null
     }
 
-    override fun discover(onFound: (LanGame) -> Unit) {
+    override fun discover(onLost: (String) -> Unit, onFound: (LanGame) -> Unit) {
         val listener = object : NsdManager.DiscoveryListener {
-            override fun onServiceFound(info: NsdServiceInfo) = resolve(info, onFound)
-            override fun onServiceLost(info: NsdServiceInfo) = Unit
+            override fun onServiceFound(info: NsdServiceInfo) {
+                val name = info.serviceName
+                sessions.putIfAbsent(name, UNRESOLVED)
+                resolve(info) { game ->
+                    // Gone while it was being resolved: reporting it now would leave it listed forever.
+                    val previous = sessions.replace(name, game.sessionId) ?: return@resolve
+                    if (previous != UNRESOLVED && previous != game.sessionId) onLost(previous)
+                    onFound(game)
+                }
+            }
+            override fun onServiceLost(info: NsdServiceInfo) {
+                sessions.remove(info.serviceName)?.takeIf { it != UNRESOLVED }?.let(onLost)
+            }
             override fun onDiscoveryStarted(serviceType: String) = Unit
             override fun onDiscoveryStopped(serviceType: String) = Unit
             override fun onStartDiscoveryFailed(serviceType: String, error: Int) {
@@ -69,6 +83,7 @@ class NsdDiscovery(context: Context) : LanDiscovery {
     private fun stopDiscovering() {
         discovery?.let { runCatching { nsd.stopServiceDiscovery(it) } }
         discovery = null
+        sessions.clear()
     }
 
     override fun close() {
@@ -117,5 +132,6 @@ class NsdDiscovery(context: Context) : LanDiscovery {
 
     private companion object {
         const val TAG = "LanDiscovery"
+        const val UNRESOLVED = ""
     }
 }

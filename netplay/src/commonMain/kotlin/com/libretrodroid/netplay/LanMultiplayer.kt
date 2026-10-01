@@ -16,7 +16,8 @@ data class LanGame(
 interface LanDiscovery : Closeable {
     fun advertise(game: LanGame)
     fun stopAdvertising()
-    fun discover(onFound: (LanGame) -> Unit)
+    /** [onLost] gets the [LanGame.sessionId] of a game that is no longer announced. Both run on background threads. */
+    fun discover(onLost: (String) -> Unit = {}, onFound: (LanGame) -> Unit)
 
     companion object {
         const val SERVICE_TYPE = "_libretrodroid._tcp"

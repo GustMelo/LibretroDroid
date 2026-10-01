@@ -18,7 +18,7 @@ class LinkLobbyTest {
                 listeners.forEach { it(game) }
             }
             override fun stopAdvertising() { synchronized(lock) { games.remove(mine) } }
-            override fun discover(onFound: (LanGame) -> Unit) {
+            override fun discover(onLost: (String) -> Unit, onFound: (LanGame) -> Unit) {
                 val known = synchronized(lock) { browsers += onFound; games.toList() }
                 known.forEach(onFound)
             }
