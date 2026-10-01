@@ -36,6 +36,7 @@ public class LibretroDroid {
     public static final int SHADER_UPSCALE_CUT = 4;
     public static final int SHADER_UPSCALE_CUT2 = 5;
     public static final int SHADER_UPSCALE_CUT3 = 6;
+    public static final int SHADER_RETRO = 7;
 
     public static final String SHADER_UPSCALE_CUT_PARAM_USE_DYNAMIC_BLEND = "USE_DYNAMIC_BLEND";
     public static final String SHADER_UPSCALE_CUT_PARAM_BLEND_MIN_CONTRAST_EDGE = "BLEND_MIN_CONTRAST_EDGE";
@@ -138,6 +139,43 @@ public class LibretroDroid {
     public static native void reset();
 
     public static native void setRumbleEnabled(boolean enabled);
+
+    /** 1 normal, 0.1..0.99 slow motion, above 1 fast-forward (up to 100x), 0 as fast as the device can. */
+    public static native void setSpeed(float speed);
+    /** Frames run per displayed frame lately; negative while rewinding. */
+    public static native float effectiveSpeed();
+
+    /** Keeps the last budgetBytes of play for rewinding; 0 turns rewind off. */
+    public static native void setRewind(long budgetBytes);
+    public static native void setRewinding(boolean rewinding);
+    public static native float rewindSeconds();
+
+    public static final int SENSOR_ACCELEROMETER = 1;
+    public static final int SENSOR_GYROSCOPE = 2;
+    public static final int SENSOR_ILLUMINANCE = 4;
+    /** SENSOR_* mask of what the core switched on. */
+    public static native int sensorsRequested();
+    /** Libretro sensor id: accelerometer x/y/z 0-2 (m/s2), gyroscope x/y/z 3-5 (rad/s), illuminance 6 (lux). */
+    public static native void setSensor(int id, float value);
+
+    /** Core options as UTF-8 JSON: [{key, value, description}], description being "Label; value1|value2|...". */
+    public static native byte[] variablesJson();
+
+    public static native void achievementsEnable(String userAgent, boolean hardcore, boolean unofficial);
+    public static native void achievementsDisable();
+    public static native void achievementsLogin(String username, String secret, boolean isToken);
+    public static native void achievementsLogout();
+    public static native void achievementsLoadGame(String path, int consoleId);
+    public static native void achievementsSetHardcore(boolean enabled);
+    public static native boolean achievementsHardcore();
+    public static native void achievementsHttpResponse(long id, int status, byte[] body);
+    public static native void achievementsIdle();
+    /** UTF-8 JSON of the loaded game's achievements, grouped in buckets. */
+    public static native byte[] achievementsList();
+    /** 0 when the game may pause now, otherwise the frames hardcore still asks to play first. */
+    public static native int achievementsPauseWait();
+    /** Pending events as a UTF-8 JSON array, or null. */
+    public static native byte[] achievementsEvents();
     public static native void setFrameSpeed(int speed);
     public static native void setAudioEnabled(boolean enabled);
     public static native void setShaderConfig(GLRetroShader shader);

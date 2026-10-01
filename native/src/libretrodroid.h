@@ -40,6 +40,7 @@
 #include "rumble.h"
 #include "shadermanager.h"
 #include "environment.h"
+#include "rewind.h"
 #include "vfs/vfsfile.h"
 #include "renderers/es3/framebufferrenderer.h"
 #include "renderers/es2/imagerendereres2.h"
@@ -139,6 +140,40 @@ public:
 
     void setFrameSpeed(unsigned int speed);
 
+    /**
+     * Emulation speed: 1 is normal, 0.25..0.75 slow motion, above 1 fast-forward (up to [MAX_SPEED]x, bounded by
+     * how many frames fit in a display refresh), 0 as fast as the device can. Audio follows up to [AUDIBLE_SPEED]x.
+     */
+    void setSpeed(float speed);
+    /** Frames the core ran per displayed frame lately: what fast-forward actually reached. */
+    float effectiveSpeed() const { return measuredSpeed; }
+
+    /** Records the last [budgetBytes] of play to step back through; 0 turns rewind off and frees it. */
+    void setRewind(size_t budgetBytes);
+    /** While true every displayed frame steps one recorded state back instead of playing. */
+    void setRewinding(bool rewinding);
+    /** Seconds of play the rewind history holds now. */
+    float rewindSeconds() const;
+
+    /** Sensors the core switched on (Sensors::Kind mask) and the latest phone readings for them. */
+    uint32_t sensorsRequested() const;
+    void setSensor(unsigned id, float value);
+
+    void achievementsEnable(const std::string& userAgent, bool hardcore, bool unofficial);
+    void achievementsDisable();
+    void achievementsLogin(const std::string& username, const std::string& password, bool token);
+    void achievementsLogout();
+    void achievementsLoadGame(const std::string& path, uint32_t consoleId);
+    void achievementsSetHardcore(bool enabled);
+    bool achievementsHardcore();
+    void achievementsHttpResponse(int64_t id, int status, const std::string& body);
+    void achievementsIdle();
+    std::string achievementsList();
+    bool achievementsCanPause(uint32_t* framesRemaining);
+
+    static constexpr float MAX_SPEED = 100.0f;
+    static constexpr float AUDIBLE_SPEED = 4.0f;
+
     void setAudioEnabled(bool enabled);
 
     void setShaderConfig(ShaderManager::Config shaderConfig);
@@ -167,6 +202,25 @@ protected:
 
 private:
     unsigned int frameSpeed = 1;
+    float speed = 1.0f;
+    double speedCredit = 0.0;
+    float measuredSpeed = 1.0f;
+    double frameCostUs = 0.0;
+    void runFrames(unsigned displayFrames);
+    void runCoreFrame(bool shown, bool audible);
+    void afterCoreFrame();
+
+    RewindBuffer rewind;
+    size_t rewindBudget = 0;
+    bool rewinding = false;
+    unsigned rewindInterval = 1;
+    unsigned rewindCountdown = 0;
+    std::vector<uint8_t> rewindScratch;
+    void captureRewindLocked();
+    void stepRewindLocked();
+    bool rewindAllowedLocked() const;
+    double contentFps = 60.0;
+    std::string libraryName;
     bool audioEnabled = true;
     bool preferLowLatencyAudio = false;
     bool rumbleEnabled = false;
@@ -199,6 +253,8 @@ private:
     static constexpr uint32_t SNAPSHOTS = 16;
     std::array<Snapshot, SNAPSHOTS> snapshots {};
     bool netplayReplaying = false;
+    bool skipVideoFrame = false;
+    bool skipAudioFrame = false;
     void stepNetplayLockstep(uint16_t localButtons);
     bool stepNetplayRollback(uint16_t localButtons);
     bool saveSnapshotLocked(uint32_t frame);

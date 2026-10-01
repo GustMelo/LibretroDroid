@@ -23,6 +23,18 @@ sealed interface ShaderConfig {
     object LCD : ShaderConfig
     object Sharp : ShaderConfig
 
+    /**
+     * Effects combined in one pass: [smooth] scaling (else sharp pixels), an LCD [grid] (lcd3x), RGB [subpixel]
+     * columns and [scanlines], each 0..1, and an overall [brightness].
+     */
+    data class Retro(
+        val smooth: Boolean = false,
+        val grid: Float = 0f,
+        val subpixel: Float = 0f,
+        val scanlines: Float = 0f,
+        val brightness: Float = 1f,
+    ) : ShaderConfig
+
     data class CUT(
         val useDynamicBlend: Boolean = true,
         val blendMinContrastEdge: Float = 0.0f,

@@ -17,6 +17,10 @@
 
 #include "shadermanager.h"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+
 namespace libretrodroid {
 const std::string ShaderManager::defaultShaderVertex =
     "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
@@ -1525,6 +1529,60 @@ const std::string ShaderManager::cut3UpscalePass2Fragment =
     "  gl_FragColor = vec4(final.rgb, 1.0);\n"
     "}";
 
+// Every effect of the retro shader is a compile-time switch, so a combination costs only the effects it uses.
+const std::unordered_map<std::string, std::string> ShaderManager::retroParams = {
+    { "SMOOTH", "0" },
+    { "GRID", "0.0" },
+    { "SUBPIXEL", "0.0" },
+    { "SCANLINES", "0.0" },
+    { "BRIGHTNESS", "1.0" },
+};
+
+const std::string ShaderManager::retroFragment =
+    "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+    "#define HIGHP highp\n"
+    "#else\n"
+    "#define HIGHP mediump\n"
+    "#endif\n"
+    "\n"
+    "precision mediump float;\n"
+    "uniform lowp sampler2D texture;\n"
+    "uniform HIGHP vec2 textureSize;\n"
+    "uniform mediump float screenDensity;\n"
+    "\n"
+    "varying HIGHP vec2 coords;\n"
+    "varying HIGHP vec2 screenCoords;\n"
+    "varying mediump float screenMaskStrength;\n"
+    "\n"
+    "void main() {\n"
+    "#if SMOOTH\n"
+    "  lowp vec3 texel = texture2D(texture, coords).rgb;\n"
+    "#else\n"
+    "  mediump vec2 threshold = vec2(1.0 / screenDensity);\n"
+    "  mediump vec2 x = fract(screenCoords);\n"
+    "  x = 0.5 * (smoothstep(vec2(0.0), threshold, x) + smoothstep(vec2(1.0) - threshold, vec2(1.0), x));\n"
+    "  lowp vec3 texel = texture2D(texture, (floor(screenCoords) + x) / textureSize).rgb;\n"
+    "#endif\n"
+    "  HIGHP vec2 cell = fract(screenCoords);\n"
+    // Masks fade out where a source pixel covers too few screen pixels to draw them without moire.
+    "  mediump float strength = screenMaskStrength;\n"
+    "#if USE_GRID\n"
+    // Thin dark gaps between LCD cells, as on a Game Boy screen (lcd3x), with a boost so the picture keeps its light.
+    "  mediump vec2 gap = smoothstep(vec2(0.0), vec2(0.18), cell) * smoothstep(vec2(0.0), vec2(0.18), vec2(1.0) - cell);\n"
+    "  texel *= mix(1.0, gap.x * gap.y, GRID * strength) * (1.0 + 0.25 * GRID * strength);\n"
+    "#endif\n"
+    "#if USE_SUBPIXEL\n"
+    "  mediump float column = cell.x * 3.0;\n"
+    "  mediump vec3 rgb = clamp(vec3(1.5) - abs(vec3(column) - vec3(0.5, 1.5, 2.5)), 0.0, 1.0);\n"
+    "  texel *= mix(vec3(1.0), 0.45 + 1.1 * rgb, SUBPIXEL * strength);\n"
+    "#endif\n"
+    "#if USE_SCANLINES\n"
+    "  mediump float line = 1.0 - abs(cell.y * 2.0 - 1.0);\n"
+    "  texel *= mix(1.0, (0.55 + 0.45 * line) * 1.2, SCANLINES * strength);\n"
+    "#endif\n"
+    "  gl_FragColor = vec4(clamp(texel * BRIGHTNESS, 0.0, 1.0), 1.0);\n"
+    "}\n";
+
 ShaderManager::Chain ShaderManager::getShader(const ShaderManager::Config& config) {
     switch (config.type) {
     case Type::SHADER_DEFAULT: {
@@ -1537,6 +1595,25 @@ ShaderManager::Chain ShaderManager::getShader(const ShaderManager::Config& confi
 
     case Type::SHADER_LCD: {
         return { { {defaultShaderVertex, lcdShaderFragment, true, 1.0 } }, true };
+    }
+
+    case Type::SHADER_RETRO: {
+        // GLSL ES 1.0 has no int to float conversion and the preprocessor no float comparison: every strength
+        // becomes a float literal plus an integer switch.
+        std::unordered_map<std::string, std::string> params = config.params;
+        for (const char* key : { "GRID", "SUBPIXEL", "SCANLINES", "BRIGHTNESS" }) {
+            auto found = params.find(key);
+            float value = found != params.end() ? std::strtof(found->second.c_str(), nullptr)
+                : std::strtof(retroParams.at(key).c_str(), nullptr);
+            char literal[32];
+            std::snprintf(literal, sizeof(literal), "%.4f", value);
+            params[key] = literal;
+            if (std::string(key) != "BRIGHTNESS") params[std::string("USE_") + key] = value > 0.0f ? "1" : "0";
+        }
+        bool smooth = params.count("SMOOTH") && params.at("SMOOTH") == "1";
+        params["SMOOTH"] = smooth ? "1" : "0";
+        std::string defines = buildDefines(retroParams, params);
+        return { { { defines + defaultShaderVertex, defines + retroFragment, true, 1.0 } }, smooth };
     }
 
     case Type::SHADER_SHARP: {

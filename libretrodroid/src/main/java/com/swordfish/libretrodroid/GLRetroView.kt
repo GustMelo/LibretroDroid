@@ -93,6 +93,73 @@ class GLRetroView(
         else { LibretroDroid.setFrameSpeed(value); true }
     }
 
+    /**
+     * Emulation speed: 1 normal, 0.1..0.99 slow motion, above 1 fast-forward up to 100x (as many frames as fit in a
+     * display refresh), 0 as fast as the device can. A link cable session plays only at 1.
+     */
+    var speed: Float by Delegates.vetoable(1f) { _, _, value ->
+        if (isLinkActive && value != 1f) false
+        else { LibretroDroid.setSpeed(value); true }
+    }
+
+    /** Frames the core ran per displayed frame lately (what fast-forward reached); negative while rewinding. */
+    val effectiveSpeed: Float get() = LibretroDroid.effectiveSpeed()
+
+    /** Keeps the last [budgetBytes] of play to rewind through; 0 turns rewind off and frees it. */
+    fun setRewind(budgetBytes: Long) = LibretroDroid.setRewind(budgetBytes)
+
+    /** While true each displayed frame steps back through the recorded play instead of advancing. */
+    var rewinding: Boolean by Delegates.observable(false) { _, _, value -> LibretroDroid.setRewinding(value) }
+
+    /** Seconds of play the rewind history holds now. */
+    val rewindSeconds: Float get() = LibretroDroid.rewindSeconds()
+
+    /** Sensors the core switched on, as [LibretroDroid.SENSOR_ACCELEROMETER] and friends. Cheap: poll it. */
+    val sensorsRequested: Int get() = LibretroDroid.sensorsRequested()
+
+    /** Latest reading of libretro sensor [id]: accelerometer 0-2 (m/s²), gyroscope 3-5 (rad/s), light 6 (lux). */
+    fun setSensor(id: Int, value: Float) = LibretroDroid.setSensor(id, value)
+
+    /** Core options as JSON: [{key, value, description}], description being "Label; value1|value2|...". */
+    fun coreOptionsJson(): String = runOnEmulationThread(true) { LibretroDroid.variablesJson().decodeToString() }
+
+    /** RetroAchievements inside the engine. Events (including the HTTP calls to make) arrive on [achievementEvents]. */
+    fun achievementsEnable(userAgent: String, hardcore: Boolean, unofficial: Boolean) =
+        LibretroDroid.achievementsEnable(userAgent, hardcore, unofficial)
+
+    fun achievementsDisable() = LibretroDroid.achievementsDisable()
+
+    fun achievementsLogin(username: String, secret: String, isToken: Boolean) =
+        LibretroDroid.achievementsLogin(username, secret, isToken)
+
+    fun achievementsLogout() = LibretroDroid.achievementsLogout()
+
+    /** After the game is running: identifies [path] for RetroAchievements console [consoleId] and loads its set. */
+    fun achievementsLoadGame(path: String, consoleId: Int) = LibretroDroid.achievementsLoadGame(path, consoleId)
+
+    fun achievementsSetHardcore(enabled: Boolean) = LibretroDroid.achievementsSetHardcore(enabled)
+
+    val achievementsHardcore: Boolean get() = LibretroDroid.achievementsHardcore()
+
+    /** Answers an "http" event; [status] <= 0 when the request never reached the server. */
+    fun achievementsHttpResponse(id: Long, status: Int, body: ByteArray) = LibretroDroid.achievementsHttpResponse(id, status, body)
+
+    /** Keeps RetroAchievements' network queue moving while the game is paused. */
+    fun achievementsIdle() = LibretroDroid.achievementsIdle()
+
+    fun achievementsListJson(): String = LibretroDroid.achievementsList().decodeToString()
+
+    /** 0 when the game may pause now; otherwise frames hardcore asks to play first. */
+    val achievementsPauseWait: Int get() = LibretroDroid.achievementsPauseWait()
+
+    /** Takes pending events as a JSON array, or null; thread-safe, for polling while the game is paused. */
+    fun drainAchievementEvents(): String? = LibretroDroid.achievementsEvents()?.decodeToString()
+
+    private val achievementEventsSubject = MutableSharedFlow<String>(extraBufferCapacity = 64)
+
+    /** JSON arrays of RetroAchievements events, emitted after the frame that raised them. */
+    val achievementEvents: Flow<String> get() = achievementEventsSubject
+
     var shader: ShaderConfig by Delegates.observable(data.shader) { _, _, value ->
         LibretroDroid.setShaderConfig(buildShader(value))
     }
@@ -212,6 +279,15 @@ class GLRetroView(
             LibretroDroid.serializeState()
         }
     }
+
+    /** Replaces every cheat with [codes], in order, in one emulation-thread hop; empty removes them all. */
+    fun setCheats(codes: List<String>) = runOnEmulationThread(true) {
+        LibretroDroid.resetCheat()
+        codes.forEachIndexed { index, code -> LibretroDroid.setCheat(index, true, code) }
+    }
+
+    /** Rumble events on [getRumbleEvents]: on while a game asks for them and the player wants them. */
+    fun setRumbleEnabled(enabled: Boolean) = LibretroDroid.setRumbleEnabled(enabled)
 
     fun setCheat(index: Int, enable: Boolean, code: String, useEmulationThread: Boolean = true) {
         runOnEmulationThread(useEmulationThread) {
@@ -556,6 +632,7 @@ class GLRetroView(
                 }
                 LibretroDroid.step(this@GLRetroView)
                 streamFrame()
+                LibretroDroid.achievementsEvents()?.let { achievementEventsSubject.tryEmit(it.decodeToString()) }
                 lifecycle?.coroutineScope?.launch {
                     retroGLEventsSubject.emit(GLRetroEvents.FrameRendered)
                 }
@@ -647,6 +724,16 @@ class GLRetroView(
             is ShaderConfig.CRT -> GLRetroShader(LibretroDroid.SHADER_CRT)
             is ShaderConfig.LCD -> GLRetroShader(LibretroDroid.SHADER_LCD)
             is ShaderConfig.Sharp -> GLRetroShader(LibretroDroid.SHADER_SHARP)
+            is ShaderConfig.Retro -> GLRetroShader(
+                LibretroDroid.SHADER_RETRO,
+                buildParams(
+                    "SMOOTH" to if (config.smooth) "1" else "0",
+                    "GRID" to toParam(config.grid),
+                    "SUBPIXEL" to toParam(config.subpixel),
+                    "SCANLINES" to toParam(config.scanlines),
+                    "BRIGHTNESS" to toParam(config.brightness),
+                )
+            )
             is ShaderConfig.CUT -> GLRetroShader(
                 LibretroDroid.SHADER_UPSCALE_CUT,
                 buildParams(

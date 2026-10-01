@@ -30,8 +30,8 @@ public:
     void handleRumbleUpdates(const std::function<void(int, float, float)> &handler);
 
 private:
-    std::array<RumbleState, 4> rumbleStates;
-    std::array<bool, 4> dirtyStates;
+    std::array<RumbleState, 4> rumbleStates {};
+    std::array<bool, 4> dirtyStates {};
 };
 }
 

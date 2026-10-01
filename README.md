@@ -18,6 +18,17 @@ copyright notices are preserved. This is an independent fork, not an official re
 - Link Cable (GB/GBC/GBA and Game Gear between two devices on a LAN, Android and iOS): see
   [docs/link-cable-architecture.md](docs/link-cable-architecture.md).
 
+- Player features, the same on both platforms (JNI in `LibretroDroid`/`GLRetroView`, C API in `retroengine.h`):
+  - Speed: fast-forward up to 100x within each display refresh (intermediate frames skip video upload, audio
+    pitched up to 4x and muted above), slow motion, "as fast as possible".
+  - Rewind for every core: XOR delta ring buffer of save states within a byte budget (`native/src/rewind.h`).
+  - Libretro sensor interface (accelerometer, gyroscope, light) for tilt, gyro and solar cartridges; rumble on iOS.
+  - RetroAchievements through rcheevos `rc_client` (v12.5, `native/third_party/rcheevos`): the frontend performs the
+    HTTP calls the engine emits as JSON events; hardcore blocks state loads, rewind, slow motion, cheats and
+    disallowed core options.
+  - A combinable one-pass shader (`SHADER_RETRO`: sharp or smooth, LCD grid, RGB subpixels, scanlines), cheats and
+    core options with their descriptions on iOS too.
+
 Supported builds: Android arm64-v8a; iOS arm64 device and arm64 simulator.
 
 ## Build and publish

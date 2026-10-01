@@ -10,7 +10,18 @@ extern "C" {
 #endif
 
 #define RE_SHADER_DEFAULT 0
+#define RE_SHADER_CRT 1
+#define RE_SHADER_LCD 2
 #define RE_SHADER_SHARP 3
+#define RE_SHADER_UPSCALE_CUT 4
+#define RE_SHADER_UPSCALE_CUT2 5
+#define RE_SHADER_UPSCALE_CUT3 6
+/* params: SMOOTH=0|1;GRID=0..1;SUBPIXEL=0..1;SCANLINES=0..1;BRIGHTNESS=0.5..1.5 */
+#define RE_SHADER_RETRO 7
+
+#define RE_SENSOR_ACCELEROMETER 1
+#define RE_SENSOR_GYROSCOPE 2
+#define RE_SENSOR_ILLUMINANCE 4
 
 #define RE_NETPLAY_LOCAL_INPUT 0
 #define RE_NETPLAY_STATE_HASH 1
@@ -22,6 +33,10 @@ typedef struct re_config {
     const char *language;
     float refresh_rate;
     int shader;
+    /** Core options applied before the core starts (those marked "(Restart)" only take effect this way). */
+    const char *const *variable_keys;
+    const char *const *variable_values;
+    int variable_count;
 } re_config;
 
 const char *re_last_error(void);
@@ -108,6 +123,51 @@ void re_set_audio_tap(re_audio_fn audio, void *context);
 /* While tapped: true plays silence on this device, so the sound is heard only where it streams to. Removing the
  * tap turns it off. */
 void re_set_audio_tap_only(bool tap_only);
+
+/* Speed: 1 normal, 0.1..0.99 slow motion, >1 fast-forward up to 100x, 0 as fast as possible. */
+void re_set_speed(float speed);
+/* Frames run per displayed frame lately (negative while rewinding). */
+float re_effective_speed(void);
+
+/* Rewind history kept within budget_bytes; 0 turns it off. */
+void re_set_rewind(size_t budget_bytes);
+void re_set_rewinding(bool rewinding);
+float re_rewind_seconds(void);
+
+/* Sensors the core switched on (RE_SENSOR_* mask); readings by libretro id: accel x/y/z (m/s^2) 0-2,
+   gyro x/y/z (rad/s) 3-5, illuminance (lux) 6. */
+uint32_t re_sensors_requested(void);
+void re_set_sensor(unsigned id, float value);
+
+typedef void (*re_rumble_fn)(void *context, int port, float weak, float strong);
+void re_set_rumble_enabled(bool enabled);
+/* Calls rumble for every port whose motors changed since the last poll. */
+void re_poll_rumble(re_rumble_fn rumble, void *context);
+
+void re_cheat_reset(void);
+void re_cheat_set(unsigned index, bool enabled, const char *code);
+
+/* params: "KEY=VALUE;KEY=VALUE" (see RE_SHADER_RETRO), or NULL. */
+void re_set_shader(int shader, const char *params);
+
+/* Core options as a JSON array of {key, value, description}; the description is the core's
+   "Label; value1|value2|..." string. Free with re_free. */
+char *re_variables_json(void);
+
+/* RetroAchievements (rcheevos rc_client inside the engine). Server calls and everything to show come out
+   of re_ra_events as a JSON array (NULL when there is nothing); answer "http" events with re_ra_http_response. */
+void re_ra_enable(const char *user_agent, bool hardcore, bool unofficial);
+void re_ra_disable(void);
+void re_ra_login(const char *username, const char *secret, bool is_token);
+void re_ra_logout(void);
+void re_ra_load_game(const char *path, uint32_t console_id);
+void re_ra_set_hardcore(bool enabled);
+bool re_ra_hardcore(void);
+void re_ra_http_response(int64_t id, int status, const char *body, size_t length);
+void re_ra_idle(void);
+char *re_ra_list(void);
+bool re_ra_can_pause(uint32_t *frames_remaining);
+char *re_ra_events(void);
 
 #ifdef __cplusplus
 }

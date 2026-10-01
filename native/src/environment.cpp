@@ -32,6 +32,7 @@
 #include "vfs/vfs.h"
 #include "microphone/microphoneinterface.h"
 #include "netplay.h"
+#include "sensors.h"
 
 void Environment::initialize(
     const std::string &requiredSystemDirectory,
@@ -69,6 +70,15 @@ void Environment::deinitialize() {
     gameGeometryAspectRatio = -1.0f;
 
     rumbleStates.fill(libretrodroid::RumbleState {});
+
+    skipVideo = false;
+    skipAudio = false;
+    fastForwarding = false;
+    memoryDescriptors.clear();
+    memorySpaces.clear();
+    memoryMap = {};
+    hasMemoryMap = false;
+    libretrodroid::Sensors::getInstance().reset();
 }
 
 void Environment::updateVariable(const std::string& key, const std::string& value) {
@@ -98,6 +108,7 @@ bool Environment::environment_handle_set_variables(const struct retro_variable* 
         auto currentVariable = variables[key];
         currentVariable.key = key;
         currentVariable.description = description;
+        currentVariable.order = variableOrder++;
 
         if (currentVariable.value.empty()) {
             currentVariable.value = value;
@@ -331,7 +342,7 @@ bool Environment::handle_callback_environment(unsigned cmd, void *data) {
 
         case RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE: {
 
-            int flags = replaying ? 0 : (1 | 2);
+            int flags = replaying ? 0 : ((skipVideo ? 0 : 1) | (skipAudio ? 0 : 2));
             if (libretrodroid::Netplay::getInstance().isActive()) flags |= 4;
             if (data) *static_cast<int*>(data) = flags;
             return true;
@@ -355,6 +366,20 @@ bool Environment::handle_callback_environment(unsigned cmd, void *data) {
         case RETRO_ENVIRONMENT_GET_VFS_INTERFACE:
             LOGD("Called RETRO_ENVIRONMENT_GET_VFS_INTERFACE");
             return environment_handle_get_vfs_interface(static_cast<struct retro_vfs_interface_info*>(data));
+
+        case RETRO_ENVIRONMENT_GET_SENSOR_INTERFACE: {
+            auto* sensors = static_cast<struct retro_sensor_interface*>(data);
+            sensors->set_sensor_state = &libretrodroid::Sensors::callbackSetState;
+            sensors->get_sensor_input = &libretrodroid::Sensors::callbackGetInput;
+            return true;
+        }
+
+        case RETRO_ENVIRONMENT_SET_MEMORY_MAPS:
+            return environment_handle_set_memory_maps(static_cast<const struct retro_memory_map*>(data));
+
+        case RETRO_ENVIRONMENT_GET_FASTFORWARDING:
+            if (data) *static_cast<bool*>(data) = fastForwarding;
+            return true;
 
         case RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE:
             LOGD("Called RETRO_ENVIRONMENT_GET_MICROPHONE_INTERFACE");
@@ -466,8 +491,8 @@ const std::vector<struct Variable> Environment::getVariables() const {
     std::sort(
         result.begin(),
         result.end(),
-        [](struct Variable v1, struct Variable v2) {
-            return v1.key < v2.key;
+        [](const struct Variable& v1, const struct Variable& v2) {
+            return v1.order != v2.order ? v1.order < v2.order : v1.key < v2.key;
         }
     );
 
@@ -508,6 +533,37 @@ void Environment::setEnableVirtualFileSystem(bool value) {
 
 void Environment::setReplaying(bool value) {
     this->replaying = value;
+}
+
+void Environment::setSkipFrame(bool video, bool audio) {
+    skipVideo = video;
+    skipAudio = audio;
+}
+
+void Environment::setFastForwarding(bool value) {
+    fastForwarding = value;
+}
+
+bool Environment::environment_handle_set_memory_maps(const struct retro_memory_map* map) {
+    if (map == nullptr) return false;
+    // The core may free its copy after the call: keep the descriptors and their address space names.
+    memorySpaces.clear();
+    memorySpaces.reserve(map->num_descriptors);
+    memoryDescriptors.assign(map->descriptors, map->descriptors + map->num_descriptors);
+    for (auto& descriptor : memoryDescriptors) {
+        memorySpaces.emplace_back(descriptor.addrspace ? descriptor.addrspace : "");
+    }
+    for (size_t i = 0; i < memoryDescriptors.size(); i++) {
+        memoryDescriptors[i].addrspace = memoryDescriptors[i].addrspace ? memorySpaces[i].c_str() : nullptr;
+    }
+    memoryMap.descriptors = memoryDescriptors.data();
+    memoryMap.num_descriptors = static_cast<unsigned>(memoryDescriptors.size());
+    hasMemoryMap = true;
+    return true;
+}
+
+const struct retro_memory_map* Environment::getMemoryMap() const {
+    return hasMemoryMap ? &memoryMap : nullptr;
 }
 
 void Environment::setEnableMicrophone(bool value) {

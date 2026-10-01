@@ -21,6 +21,7 @@
 #include "utils/rect.h"
 #include "audio_tap.h"
 #include "streamcapture.h"
+#include "achievements.h"
 
 using namespace libretrodroid;
 
@@ -108,12 +109,18 @@ void re_detach_layer(void) {
 bool re_create(const re_config *config) {
     return guarded("create", [&] {
         buttons.fill(0);
+        std::vector<Variable> variables;
+        for (int i = 0; i < config->variable_count; i++) {
+            if (config->variable_keys[i] && config->variable_values[i]) {
+                variables.push_back(Variable { config->variable_keys[i], config->variable_values[i] });
+            }
+        }
         LibretroDroid::getInstance().create(
             3,
             config->core_path,
             config->system_dir,
             config->saves_dir,
-            {},
+            variables,
             ShaderManager::Config { static_cast<ShaderManager::Type>(config->shader), {} },
             config->refresh_rate,
             true,
@@ -356,4 +363,108 @@ void re_set_audio_tap(re_audio_fn audio, void *context) {
     if (!audio) setAudioTapOnly(false);
 }
 void re_set_audio_tap_only(bool tap_only) { setAudioTapOnly(tap_only); }
+
+void re_set_speed(float speed) { LibretroDroid::getInstance().setSpeed(speed); }
+
+float re_effective_speed(void) { return LibretroDroid::getInstance().effectiveSpeed(); }
+
+void re_set_rewind(size_t budget_bytes) { LibretroDroid::getInstance().setRewind(budget_bytes); }
+
+void re_set_rewinding(bool rewinding) { LibretroDroid::getInstance().setRewinding(rewinding); }
+
+float re_rewind_seconds(void) { return LibretroDroid::getInstance().rewindSeconds(); }
+
+uint32_t re_sensors_requested(void) { return LibretroDroid::getInstance().sensorsRequested(); }
+
+void re_set_sensor(unsigned id, float value) { LibretroDroid::getInstance().setSensor(id, value); }
+
+void re_set_rumble_enabled(bool enabled) { LibretroDroid::getInstance().setRumbleEnabled(enabled); }
+
+void re_poll_rumble(re_rumble_fn rumble, void *context) {
+    LibretroDroid::getInstance().handleRumbleUpdates([&](int port, float weak, float strong) {
+        rumble(context, port, weak, strong);
+    });
+}
+
+void re_cheat_reset(void) { guarded("resetCheat", [] { LibretroDroid::getInstance().resetCheat(); }); }
+
+void re_cheat_set(unsigned index, bool enabled, const char *code) {
+    guarded("setCheat", [&] { LibretroDroid::getInstance().setCheat(index, enabled, code ? code : ""); });
+}
+
+void re_set_shader(int shader, const char *params) {
+    ShaderManager::Config config { static_cast<ShaderManager::Type>(shader), {} };
+    std::string text = params ? params : "";
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find(';', start);
+        if (end == std::string::npos) end = text.size();
+        std::string pair = text.substr(start, end - start);
+        size_t equals = pair.find('=');
+        if (equals != std::string::npos && equals > 0) config.params[pair.substr(0, equals)] = pair.substr(equals + 1);
+        start = end + 1;
+    }
+    LibretroDroid::getInstance().setShaderConfig(config);
+}
+
+static char *copyString(const std::string &text) {
+    auto *out = static_cast<char *>(std::malloc(text.size() + 1));
+    if (out) std::memcpy(out, text.c_str(), text.size() + 1);
+    return out;
+}
+
+char *re_variables_json(void) {
+    std::string out = "[";
+    bool first = true;
+    for (const auto &variable : LibretroDroid::getInstance().getVariables()) {
+        if (!first) out += ",";
+        first = false;
+        out += "{\"key\":" + json::quote(variable.key) + ",\"value\":" + json::quote(variable.value) +
+               ",\"description\":" + json::quote(variable.description) + "}";
+    }
+    out += "]";
+    return copyString(out);
+}
+
+void re_ra_enable(const char *user_agent, bool hardcore, bool unofficial) {
+    LibretroDroid::getInstance().achievementsEnable(user_agent ? user_agent : "", hardcore, unofficial);
+}
+
+void re_ra_disable(void) { LibretroDroid::getInstance().achievementsDisable(); }
+
+void re_ra_login(const char *username, const char *secret, bool is_token) {
+    LibretroDroid::getInstance().achievementsLogin(username ? username : "", secret ? secret : "", is_token);
+}
+
+void re_ra_logout(void) { LibretroDroid::getInstance().achievementsLogout(); }
+
+void re_ra_load_game(const char *path, uint32_t console_id) {
+    LibretroDroid::getInstance().achievementsLoadGame(path ? path : "", console_id);
+}
+
+void re_ra_set_hardcore(bool enabled) { LibretroDroid::getInstance().achievementsSetHardcore(enabled); }
+
+bool re_ra_hardcore(void) { return LibretroDroid::getInstance().achievementsHardcore(); }
+
+void re_ra_http_response(int64_t id, int status, const char *body, size_t length) {
+    LibretroDroid::getInstance().achievementsHttpResponse(id, status, body ? std::string(body, length) : std::string());
+}
+
+void re_ra_idle(void) { LibretroDroid::getInstance().achievementsIdle(); }
+
+char *re_ra_list(void) { return copyString(LibretroDroid::getInstance().achievementsList()); }
+
+bool re_ra_can_pause(uint32_t *frames_remaining) { return LibretroDroid::getInstance().achievementsCanPause(frames_remaining); }
+
+char *re_ra_events(void) {
+    auto events = Achievements::getInstance().drainEvents();
+    if (events.empty()) return nullptr;
+    std::string out = "[";
+    for (size_t i = 0; i < events.size(); i++) {
+        if (i) out += ",";
+        out += events[i];
+    }
+    out += "]";
+    return copyString(out);
+}
 }

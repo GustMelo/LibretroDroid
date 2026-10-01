@@ -57,6 +57,13 @@ public:
 
     void setReplaying(bool value);
 
+    /** A fast-forward frame nobody sees or hears: the core may skip drawing and, with [audio] false, mixing. */
+    void setSkipFrame(bool video, bool audio);
+    void setFastForwarding(bool value);
+
+    /** The core's memory map (RETRO_ENVIRONMENT_SET_MEMORY_MAPS), or null; valid while the game is loaded. */
+    const struct retro_memory_map* getMemoryMap() const;
+
 private:
     Environment() {}
 
@@ -132,6 +139,16 @@ private:
     bool useVirtualFileSystem = false;
     bool enableMicrophone = false;
     bool replaying = false;
+    bool skipVideo = false;
+    bool skipAudio = false;
+    bool fastForwarding = false;
+
+    std::vector<struct retro_memory_descriptor> memoryDescriptors;
+    std::vector<std::string> memorySpaces;
+    struct retro_memory_map memoryMap {};
+    bool hasMemoryMap = false;
+    bool environment_handle_set_memory_maps(const struct retro_memory_map* map);
+    unsigned variableOrder = 0;
 
     int pixelFormat = RETRO_PIXEL_FORMAT_RGB565;
     bool useHWAcceleration = false;
@@ -160,12 +177,16 @@ public:
     std::string key;
     std::string value;
     std::string description;
+    /** Position in the core's own list, so options show in the order the core declares them. */
+    unsigned order = 0;
 };
 
 struct Controller {
 public:
     unsigned id;
     std::string description;
+    /** Position in the core's own list, so options show in the order the core declares them. */
+    unsigned order = 0;
 };
 
 #endif

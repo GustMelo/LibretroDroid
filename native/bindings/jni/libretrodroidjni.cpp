@@ -48,6 +48,7 @@
 #include "utils/jnistring.h"
 #include "streamcapture.h"
 #include "audio_tap.h"
+#include "achievements.h"
 
 extern "C" JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_stopNetpacket(JNIEnv*, jclass);
 
@@ -87,7 +88,7 @@ JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_updateVari
     jobject variable
 ) {
     Variable v = JavaUtils::variableFromJava(env, variable);
-    Environment::getInstance().updateVariable(v.key, v.value);
+    LibretroDroid::getInstance().updateVariable(v);
 }
 
 JNIEXPORT jobjectArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_getVariables(
@@ -806,4 +807,132 @@ JNIEXPORT jint JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_readStream
     return produced;
 }
 }
+
+extern "C" {
+static jbyteArray utf8Bytes(JNIEnv* env, const std::string& text) {
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(text.size()));
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(text.size()), reinterpret_cast<const jbyte*>(text.data()));
+    return result;
+}
+
+static std::string stringFrom(JNIEnv* env, jstring text) {
+    if (text == nullptr) return {};
+    JniString value(env, text);
+    return value.stdString();
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setSpeed(JNIEnv*, jclass, jfloat speed) {
+    LibretroDroid::getInstance().setSpeed(speed);
+}
+
+JNIEXPORT jfloat JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_effectiveSpeed(JNIEnv*, jclass) {
+    return LibretroDroid::getInstance().effectiveSpeed();
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setRewind(JNIEnv*, jclass, jlong budgetBytes) {
+    LibretroDroid::getInstance().setRewind(budgetBytes > 0 ? static_cast<size_t>(budgetBytes) : 0);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setRewinding(JNIEnv*, jclass, jboolean rewinding) {
+    LibretroDroid::getInstance().setRewinding(rewinding);
+}
+
+JNIEXPORT jfloat JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_rewindSeconds(JNIEnv*, jclass) {
+    return LibretroDroid::getInstance().rewindSeconds();
+}
+
+JNIEXPORT jint JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_sensorsRequested(JNIEnv*, jclass) {
+    return static_cast<jint>(LibretroDroid::getInstance().sensorsRequested());
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setSensor(JNIEnv*, jclass, jint id, jfloat value) {
+    LibretroDroid::getInstance().setSensor(static_cast<unsigned>(id), value);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_variablesJson(JNIEnv* env, jclass) {
+    std::string out = "[";
+    bool first = true;
+    for (const auto& variable : LibretroDroid::getInstance().getVariables()) {
+        if (!first) out += ",";
+        first = false;
+        out += "{\"key\":" + json::quote(variable.key) + ",\"value\":" + json::quote(variable.value) +
+               ",\"description\":" + json::quote(variable.description) + "}";
+    }
+    out += "]";
+    return utf8Bytes(env, out);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsEnable(
+    JNIEnv* env, jclass, jstring userAgent, jboolean hardcore, jboolean unofficial
+) {
+    LibretroDroid::getInstance().achievementsEnable(stringFrom(env, userAgent), hardcore, unofficial);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsDisable(JNIEnv*, jclass) {
+    LibretroDroid::getInstance().achievementsDisable();
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsLogin(
+    JNIEnv* env, jclass, jstring username, jstring secret, jboolean isToken
+) {
+    LibretroDroid::getInstance().achievementsLogin(stringFrom(env, username), stringFrom(env, secret), isToken);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsLogout(JNIEnv*, jclass) {
+    LibretroDroid::getInstance().achievementsLogout();
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsLoadGame(
+    JNIEnv* env, jclass, jstring path, jint consoleId
+) {
+    LibretroDroid::getInstance().achievementsLoadGame(stringFrom(env, path), static_cast<uint32_t>(consoleId));
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsSetHardcore(JNIEnv*, jclass, jboolean enabled) {
+    LibretroDroid::getInstance().achievementsSetHardcore(enabled);
+}
+
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsHardcore(JNIEnv*, jclass) {
+    return LibretroDroid::getInstance().achievementsHardcore();
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsHttpResponse(
+    JNIEnv* env, jclass, jlong id, jint status, jbyteArray body
+) {
+    std::string text;
+    if (body != nullptr) {
+        jsize length = env->GetArrayLength(body);
+        text.resize(static_cast<size_t>(length));
+        env->GetByteArrayRegion(body, 0, length, reinterpret_cast<jbyte*>(text.data()));
+    }
+    LibretroDroid::getInstance().achievementsHttpResponse(id, status, text);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsIdle(JNIEnv*, jclass) {
+    LibretroDroid::getInstance().achievementsIdle();
+}
+
+JNIEXPORT jbyteArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsList(JNIEnv* env, jclass) {
+    return utf8Bytes(env, LibretroDroid::getInstance().achievementsList());
+}
+
+JNIEXPORT jint JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsPauseWait(JNIEnv*, jclass) {
+    uint32_t remaining = 0;
+    return LibretroDroid::getInstance().achievementsCanPause(&remaining) ? 0 : static_cast<jint>(std::max(remaining, 1u));
+}
+
+JNIEXPORT jbyteArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_achievementsEvents(JNIEnv* env, jclass) {
+    auto events = Achievements::getInstance().drainEvents();
+    if (events.empty()) return nullptr;
+    std::string out = "[";
+    for (size_t i = 0; i < events.size(); i++) {
+        if (i) out += ",";
+        out += events[i];
+    }
+    out += "]";
+    return utf8Bytes(env, out);
+}
+
+}
+
 }

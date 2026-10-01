@@ -8,6 +8,16 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 
 set(RE_DIR ${CMAKE_CURRENT_LIST_DIR})
 set(LIBRETRO_COMMON_DIR ${RE_DIR}/third_party/libretro/libretro-common)
+set(RCHEEVOS_DIR ${RE_DIR}/third_party/rcheevos)
+
+# RetroAchievements runtime (MIT): rc_client, the hashes of every supported console and the libretro memory maps.
+file(GLOB RCHEEVOS_SOURCES
+        ${RCHEEVOS_DIR}/src/*.c
+        ${RCHEEVOS_DIR}/src/rapi/*.c
+        ${RCHEEVOS_DIR}/src/rcheevos/*.c
+        ${RCHEEVOS_DIR}/src/rhash/*.c
+)
+list(FILTER RCHEEVOS_SOURCES EXCLUDE REGEX ".*/(aes|hash_encrypted)\\.c$")
 
 set(RE_COMMON_SOURCES
         src/libretrodroid.cpp
@@ -32,6 +42,7 @@ set(RE_COMMON_SOURCES
         src/rumble.cpp
         src/rumblestate.cpp
         src/streamcapture.cpp
+        src/achievements.cpp
         src/utils/utils.cpp
         src/utils/libretrodroidexception.cpp
         src/utils/rect.cpp
@@ -44,6 +55,7 @@ set(RE_COMMON_SOURCES
         ${LIBRETRO_COMMON_DIR}/encodings/encoding_utf.c
         ${LIBRETRO_COMMON_DIR}/file/file_path.c
         ${LIBRETRO_COMMON_DIR}/time/rtime.c
+        ${RCHEEVOS_SOURCES}
 )
 
 if(ANDROID)
@@ -85,5 +97,5 @@ elseif(APPLE)
     target_compile_definitions(retroengine PRIVATE GL_GLEXT_PROTOTYPES EGL_EGLEXT_PROTOTYPES)
 endif()
 
-target_compile_definitions(${RE_TARGET} PRIVATE VFS_FRONTEND HAVE_STRL)
-target_include_directories(${RE_TARGET} PRIVATE ${LIBRETRO_COMMON_DIR}/include src)
+target_compile_definitions(${RE_TARGET} PRIVATE VFS_FRONTEND HAVE_STRL RC_CLIENT_SUPPORTS_HASH RC_HASH_NO_ENCRYPTED)
+target_include_directories(${RE_TARGET} PRIVATE ${LIBRETRO_COMMON_DIR}/include src ${RCHEEVOS_DIR}/include ${RCHEEVOS_DIR}/src)

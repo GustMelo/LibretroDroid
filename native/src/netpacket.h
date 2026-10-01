@@ -27,6 +27,8 @@ public:
     void pollReceive();
     bool connected(uint16_t clientId);
     void disconnected(uint16_t clientId);
+    /** A link session is open: the core's state is tied to another device's. */
+    bool isRunning() const { return running; }
 
 private:
     const retro_netpacket_callback* core = nullptr;

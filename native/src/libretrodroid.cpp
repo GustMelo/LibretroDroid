@@ -20,6 +20,7 @@
 #include <EGL/egl.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <string>
 #include <utility>
@@ -49,6 +50,8 @@
 #include "utils/rect.h"
 #include "errorcodes.h"
 #include "vfs/vfs.h"
+#include "achievements.h"
+#include "sensors.h"
 
 namespace libretrodroid {
 
@@ -89,7 +92,7 @@ int16_t LibretroDroid::callback_set_input_state(
 
 void LibretroDroid::updateAudioSampleRateMultiplier() {
     if (audio) {
-        audio->setPlaybackSpeed(frameSpeed);
+        audio->setPlaybackSpeed(1.0);
     }
 }
 
@@ -133,6 +136,10 @@ void LibretroDroid::changeDisk(unsigned int index) {
 }
 
 void LibretroDroid::updateVariable(const Variable& variable) {
+    if (!Achievements::getInstance().settingAllowed(variable.key, variable.value)) {
+        LOGE("Option %s=%s is not allowed in hardcore mode", variable.key.c_str(), variable.value.c_str());
+        return;
+    }
     Environment::getInstance().updateVariable(variable.key, variable.value);
 }
 
@@ -151,7 +158,15 @@ void LibretroDroid::setControllerType(unsigned int port, unsigned int type) {
 bool LibretroDroid::unserializeState(int8_t *data, size_t size) {
     std::lock_guard<std::mutex> lock(coreLock);
 
-    return core->retro_unserialize(data, size);
+    // Hardcore forbids loading states; a netplay session still starts its clients from the host's state.
+    Achievements& achievements = Achievements::getInstance();
+    if (achievements.hardcoreActive() && !Netplay::getInstance().isActive()) {
+        LOGE("Refusing to load a state in hardcore mode");
+        return false;
+    }
+    bool loaded = core->retro_unserialize(data, size);
+    if (loaded) achievements.stateLoaded();
+    return loaded;
 }
 
 bool LibretroDroid::unserializeSRAM(int8_t* data, size_t size) {
@@ -325,6 +340,12 @@ void LibretroDroid::create(
     this->immersiveModeConfig = immersiveModeConfig.value_or(ImmersiveMode::Config{});
     audioEnabled = true;
     frameSpeed = 1;
+    speed = 1.0f;
+    speedCredit = 0.0;
+    measuredSpeed = 1.0f;
+    frameCostUs = 0.0;
+    rewinding = false;
+    rewind.clear();
 
     core = std::make_unique<Core>(soFilePath);
 
@@ -457,6 +478,10 @@ void LibretroDroid::destroy() {
     }
 
     Netpacket::getInstance().clear();
+    Achievements::getInstance().unloadGame();
+    rewind.clear();
+    rewindScratch.clear();
+    rewindScratch.shrink_to_fit();
     core->retro_unload_game();
     core->retro_deinit();
 
@@ -518,8 +543,7 @@ void LibretroDroid::step() {
             frames = std::min(requestedFrames, 2u);
         }
 
-        for (size_t i = 0; i < frames * frameSpeed; i++)
-            core->retro_run();
+        runFrames(frames);
     }
 
     if (video && !video->rendersInVideoCallback()) {
@@ -577,7 +601,212 @@ bool LibretroDroid::isRumbleEnabled() const {
 
 void LibretroDroid::setFrameSpeed(unsigned int speed) {
     frameSpeed = speed;
-    updateAudioSampleRateMultiplier();
+    setSpeed(static_cast<float>(speed));
+}
+
+void LibretroDroid::setSpeed(float requested) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    speed = requested <= 0.0f ? 0.0f : std::clamp(requested, 0.1f, MAX_SPEED);
+    speedCredit = 0.0;
+    Environment::getInstance().setFastForwarding(speed == 0.0f || speed > 1.0f);
+}
+
+void LibretroDroid::runFrames(unsigned displayFrames) {
+    using clock = std::chrono::steady_clock;
+    if (rewinding && rewindAllowedLocked()) {
+        stepRewindLocked();
+        return;
+    }
+
+    float target = speed;
+    // Hardcore allows fast-forward but no slow motion.
+    if (target > 0.0f && target < 1.0f && Achievements::getInstance().hardcoreActive()) target = 1.0f;
+    const bool unlimited = target <= 0.0f;
+    const bool audible = !unlimited && target <= AUDIBLE_SPEED;
+
+    speedCredit += displayFrames * (unlimited ? MAX_SPEED : target);
+    auto planned = static_cast<unsigned>(speedCredit);
+    speedCredit -= planned;
+    planned = std::min(planned, static_cast<unsigned>(MAX_SPEED) * std::max(displayFrames, 1u));
+
+    unsigned ran = 0;
+    if (planned > 0) {
+        // Fast-forward fills at most ~80% of the display refresh, keeping the shown frame and the UI on time.
+        const double budgetUs = 1e6 / std::max(screenRefreshRate, 30.0f) * 0.8 * displayFrames;
+        const auto start = clock::now();
+        while (ran < planned) {
+            bool last = ran + 1 == planned;
+            if (!last && ran > 0) {
+                double elapsed = std::chrono::duration<double, std::micro>(clock::now() - start).count();
+                if (elapsed + frameCostUs > budgetUs) last = true;
+            }
+            auto frameStart = clock::now();
+            runCoreFrame(last, audible);
+            double cost = std::chrono::duration<double, std::micro>(clock::now() - frameStart).count();
+            frameCostUs = frameCostUs == 0.0 ? cost : frameCostUs * 0.9 + cost * 0.1;
+            ran++;
+            if (last) break;
+        }
+        if (ran < planned) speedCredit = 0.0;
+    }
+
+    measuredSpeed = measuredSpeed * 0.9f + (static_cast<float>(ran) / std::max(displayFrames, 1u)) * 0.1f;
+    if (audio) audio->setPlaybackSpeed(audible ? std::clamp(static_cast<double>(measuredSpeed), 0.1, static_cast<double>(AUDIBLE_SPEED)) : 1.0);
+}
+
+void LibretroDroid::runCoreFrame(bool shown, bool audible) {
+    skipVideoFrame = !shown;
+    skipAudioFrame = !audible;
+    Environment::getInstance().setSkipFrame(!shown, !audible);
+    core->retro_run();
+    Environment::getInstance().setSkipFrame(false, false);
+    skipVideoFrame = false;
+    skipAudioFrame = false;
+    afterCoreFrame();
+}
+
+void LibretroDroid::afterCoreFrame() {
+    Achievements::getInstance().doFrame();
+    captureRewindLocked();
+}
+
+bool LibretroDroid::rewindAllowedLocked() const {
+    return rewindBudget > 0 && core && !Netplay::getInstance().isActive() && !Netpacket::getInstance().isRunning() &&
+           !Achievements::getInstance().hardcoreActive();
+}
+
+void LibretroDroid::captureRewindLocked() {
+    if (!rewindAllowedLocked()) {
+        if (rewind.usedBytes() > 0) rewind.clear();
+        return;
+    }
+    if (rewindCountdown > 0) {
+        rewindCountdown--;
+        return;
+    }
+    size_t size = core->retro_serialize_size();
+    if (size == 0) return;
+    rewindScratch.resize(size);
+    if (!core->retro_serialize(rewindScratch.data(), size)) return;
+    // Large states (PlayStation's 4.5 MB) are recorded less often: the cost per played frame stays near a GBA's.
+    rewindInterval = size <= (1u << 20) ? 1 : size <= (3u << 20) ? 2 : 3;
+    rewindCountdown = rewindInterval - 1;
+    rewind.push(rewindScratch.data(), size);
+}
+
+void LibretroDroid::stepRewindLocked() {
+    if (!rewind.pop()) {
+        measuredSpeed = 0.0f;
+        return;
+    }
+    measuredSpeed = -static_cast<float>(rewindInterval);
+    const auto& state = rewind.state();
+    if (!core->retro_unserialize(state.data(), state.size())) {
+        rewind.clear();
+        return;
+    }
+    // One silent frame from the restored state draws it; it is not recorded, the next pop goes further back.
+    skipAudioFrame = true;
+    Environment::getInstance().setSkipFrame(false, true);
+    core->retro_run();
+    Environment::getInstance().setSkipFrame(false, false);
+    skipAudioFrame = false;
+    rewindCountdown = 0;
+}
+
+void LibretroDroid::setRewind(size_t budgetBytes) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    rewindBudget = budgetBytes;
+    if (budgetBytes == 0) {
+        rewind.clear();
+        rewindScratch.clear();
+        rewindScratch.shrink_to_fit();
+    } else {
+        rewind.configure(budgetBytes);
+    }
+}
+
+void LibretroDroid::setRewinding(bool value) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    rewinding = value;
+    if (!value) rewindCountdown = 0;
+}
+
+float LibretroDroid::rewindSeconds() const {
+    return contentFps > 0 ? static_cast<float>(rewind.size() * rewindInterval / contentFps) : 0.0f;
+}
+
+uint32_t LibretroDroid::sensorsRequested() const {
+    return Sensors::getInstance().requested();
+}
+
+void LibretroDroid::setSensor(unsigned id, float value) {
+    Sensors::getInstance().set(id, value);
+}
+
+void LibretroDroid::achievementsEnable(const std::string& userAgent, bool hardcore, bool unofficial) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    Achievements& achievements = Achievements::getInstance();
+    achievements.setResetHandler([this] { if (core) core->retro_reset(); });
+    achievements.enable(userAgent, hardcore, unofficial);
+}
+
+void LibretroDroid::achievementsDisable() {
+    std::lock_guard<std::mutex> lock(coreLock);
+    Achievements::getInstance().disable();
+}
+
+void LibretroDroid::achievementsLogin(const std::string& username, const std::string& secret, bool token) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    if (token) Achievements::getInstance().loginWithToken(username, secret);
+    else Achievements::getInstance().login(username, secret);
+}
+
+void LibretroDroid::achievementsLogout() {
+    std::lock_guard<std::mutex> lock(coreLock);
+    Achievements::getInstance().logout();
+}
+
+void LibretroDroid::achievementsLoadGame(const std::string& path, uint32_t consoleId) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    Achievements::getInstance().loadGame(core.get(), path, consoleId, libraryName);
+}
+
+void LibretroDroid::achievementsSetHardcore(bool enabled) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    Achievements& achievements = Achievements::getInstance();
+    achievements.setHardcore(enabled);
+    if (achievements.hardcoreActive()) {
+        // Nothing from softcore play survives into hardcore: cheats off, rewind history gone, normal speed floor.
+        if (core) core->retro_cheat_reset();
+        rewind.clear();
+        rewinding = false;
+    }
+}
+
+bool LibretroDroid::achievementsHardcore() {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return Achievements::getInstance().hardcoreActive();
+}
+
+void LibretroDroid::achievementsHttpResponse(int64_t id, int status, const std::string& body) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    Achievements::getInstance().httpResponse(id, status, body);
+}
+
+void LibretroDroid::achievementsIdle() {
+    std::lock_guard<std::mutex> lock(coreLock);
+    Achievements::getInstance().idle();
+}
+
+std::string LibretroDroid::achievementsList() {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return Achievements::getInstance().achievementList();
+}
+
+bool LibretroDroid::achievementsCanPause(uint32_t* framesRemaining) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return Achievements::getInstance().canPause(framesRemaining);
 }
 
 void LibretroDroid::setAudioEnabled(bool enabled) {
@@ -597,7 +826,7 @@ void LibretroDroid::handleVideoRefresh(
     unsigned int height,
     size_t pitch
 ) {
-    if (netplayReplaying) return;
+    if (netplayReplaying || skipVideoFrame) return;
     if (video) {
         video->onNewFrame(data, width, height, pitch);
 
@@ -608,7 +837,7 @@ void LibretroDroid::handleVideoRefresh(
 }
 
 size_t LibretroDroid::handleAudioCallback(const int16_t *data, size_t frames) {
-    if (audio && audioEnabled && !netplayReplaying) {
+    if (audio && audioEnabled && !netplayReplaying && !skipAudioFrame) {
         audio->write(data, frames);
     }
     return frames;
@@ -637,6 +866,7 @@ void LibretroDroid::reset() {
     std::lock_guard<std::mutex> lock(coreLock);
 
     core->retro_reset();
+    Achievements::getInstance().reset();
 }
 
 uint64_t LibretroDroid::hashStateLocked() {
@@ -825,6 +1055,11 @@ void LibretroDroid::resetCheat() {
 void LibretroDroid::setCheat(unsigned index, bool enabled, const std::string& code) {
     std::lock_guard<std::mutex> lock(coreLock);
 
+    if (enabled && Achievements::getInstance().hardcoreActive()) {
+        LOGE("Refusing a cheat in hardcore mode");
+        return;
+    }
+
     core->retro_cheat_set(index, enabled, Utils::cloneToCString(code));
 }
 
@@ -841,6 +1076,11 @@ void LibretroDroid::afterGameLoad() {
     core->retro_get_system_av_info(&system_av_info);
 
     fpsSync = std::make_unique<FPSSync>(system_av_info.timing.fps, screenRefreshRate);
+    contentFps = system_av_info.timing.fps;
+
+    struct retro_system_info system_info {};
+    core->retro_get_system_info(&system_info);
+    libraryName = system_info.library_name ? system_info.library_name : "";
 
     double inputSampleRate = system_av_info.timing.sample_rate * fpsSync->getTimeStretchFactor();
 

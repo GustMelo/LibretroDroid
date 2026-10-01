@@ -48,6 +48,32 @@ import com.libretrodroid.engine.native.re_surface_changed
 import com.libretrodroid.engine.native.re_surface_created
 import com.libretrodroid.engine.native.re_unserialize
 import com.libretrodroid.engine.native.re_unserialize_sram
+import com.libretrodroid.engine.native.re_set_speed
+import com.libretrodroid.engine.native.re_effective_speed
+import com.libretrodroid.engine.native.re_set_rewind
+import com.libretrodroid.engine.native.re_set_rewinding
+import com.libretrodroid.engine.native.re_rewind_seconds
+import com.libretrodroid.engine.native.re_sensors_requested
+import com.libretrodroid.engine.native.re_set_sensor
+import com.libretrodroid.engine.native.re_set_rumble_enabled
+import com.libretrodroid.engine.native.re_poll_rumble
+import com.libretrodroid.engine.native.re_cheat_reset
+import com.libretrodroid.engine.native.re_cheat_set
+import com.libretrodroid.engine.native.re_set_shader
+import com.libretrodroid.engine.native.re_variables_json
+import com.libretrodroid.engine.native.re_ra_enable
+import com.libretrodroid.engine.native.re_ra_disable
+import com.libretrodroid.engine.native.re_ra_login
+import com.libretrodroid.engine.native.re_ra_logout
+import com.libretrodroid.engine.native.re_ra_load_game
+import com.libretrodroid.engine.native.re_ra_set_hardcore
+import com.libretrodroid.engine.native.re_ra_hardcore
+import com.libretrodroid.engine.native.re_ra_http_response
+import com.libretrodroid.engine.native.re_ra_idle
+import com.libretrodroid.engine.native.re_ra_list
+import com.libretrodroid.engine.native.re_ra_can_pause
+import com.libretrodroid.engine.native.re_ra_events
+import com.libretrodroid.engine.native.RE_SHADER_RETRO
 import com.libretrodroid.netplay.HostStart
 import com.libretrodroid.netplay.NetplayEmulator
 import com.libretrodroid.netplay.NetplayListener
@@ -78,6 +104,10 @@ import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
+import kotlinx.cinterop.UIntVar
+import kotlinx.cinterop.allocArrayOf
+import kotlinx.cinterop.CPointerVar
+import kotlinx.cinterop.toCStringArray
 import platform.AVFAudio.AVAudioSession
 import platform.AVFAudio.AVAudioSessionCategoryPlayback
 import platform.AVFAudio.setActive
@@ -127,7 +157,37 @@ data class RetroGame(
     val widescreen: Boolean = false,
     /** [AspectRatio.CORE], [AspectRatio.FILL] or a fixed width/height ratio such as 16/9. */
     val aspectRatio: Float = AspectRatio.CORE,
+    /** Core options set before the core starts: those marked "(Restart)" only take effect this way. */
+    val options: Map<String, String> = emptyMap(),
+    /** The picture's filter; [RetroShader.Sharp] by default. */
+    val shader: RetroShader = RetroShader.Sharp,
 )
+
+/** The picture's filter. [Retro] combines its effects in one pass, each from 0 to 1. */
+sealed interface RetroShader {
+    data object Default : RetroShader
+    data object Sharp : RetroShader
+    data object Crt : RetroShader
+    data object Lcd : RetroShader
+    data object Upscale : RetroShader
+    data class Retro(
+        val smooth: Boolean = false,
+        val grid: Float = 0f,
+        val subpixel: Float = 0f,
+        val scanlines: Float = 0f,
+        val brightness: Float = 1f,
+    ) : RetroShader
+}
+
+/** The latest rumble of a controller port, both motors 0..1. */
+fun interface RetroRumble {
+    fun rumble(port: Int, weak: Float, strong: Float)
+}
+
+/** Events of RetroAchievements as a JSON array; delivered on the render thread after the frame that raised them. */
+fun interface RetroAchievementEvents {
+    fun events(json: String)
+}
 
 /** Picture shape. Nothing is cropped: the core's and fixed ratios are letterboxed inside the view. */
 object AspectRatio {
@@ -183,6 +243,11 @@ class RetroPlayer(
 
     private val tasksLock = SynchronizedObject()
     private val tasks = ArrayList<() -> Unit>()
+
+    /** Bindings for controllers and keyboards; null keeps the classic layout. Called on the main thread. */
+    var inputMapper: RetroInputMapper?
+        get() = gamepads.mapper
+        set(value) { gamepads.mapper = value }
 
     fun setTouchButtons(mask: Int) {
         touchButtons.value = mask
@@ -284,6 +349,90 @@ class RetroPlayer(
     }
 
     override fun reset() = onRenderThread { check(!isLinkActive); re_reset() }
+
+    /**
+     * Emulation speed: 1 normal, 0.1..0.99 slow motion, above 1 fast-forward up to 100x (as many frames as fit in a
+     * display refresh), 0 as fast as the device can. A link cable session plays only at 1. Cheap: no render-thread hop.
+     */
+    fun setSpeed(speed: Float) {
+        if (isLinkActive && speed != 1f) return
+        re_set_speed(speed)
+    }
+
+    /** Frames the core ran per displayed frame lately (what fast-forward reached); negative while rewinding. */
+    val effectiveSpeed: Float get() = re_effective_speed()
+
+    /** Keeps the last [budgetBytes] of play to rewind through; 0 turns it off and frees it. */
+    fun setRewind(budgetBytes: Long) = re_set_rewind(budgetBytes.coerceAtLeast(0).toULong())
+
+    /** While true each displayed frame steps back through the recorded play instead of advancing. */
+    fun setRewinding(rewinding: Boolean) = re_set_rewinding(rewinding)
+
+    val rewindSeconds: Float get() = re_rewind_seconds()
+
+    /** Sensors the core switched on: 1 accelerometer, 2 gyroscope, 4 light. Cheap: poll it. */
+    val sensorsRequested: Int get() = re_sensors_requested().toInt()
+
+    /** Latest reading of libretro sensor [id]: accelerometer 0-2 (m/s²), gyroscope 3-5 (rad/s), light 6 (lux). */
+    fun setSensor(id: Int, value: Float) = re_set_sensor(id.toUInt(), value)
+
+    @Volatile var rumble: RetroRumble? = null
+        set(value) {
+            field = value
+            re_set_rumble_enabled(value != null)
+        }
+
+    fun setCheats(codes: List<String>) = onRenderThread {
+        re_cheat_reset()
+        codes.forEachIndexed { index, code -> re_cheat_set(index.toUInt(), true, code) }
+    }
+
+    fun setShader(shader: RetroShader) = onRenderThread {
+        applyShader(shader)
+        if (paused) re_redraw()
+    }
+
+    /** Core options as JSON: [{key, value, description}], description being "Label; value1|value2|...". */
+    fun coreOptionsJson(): String = onRenderThread { takeString { re_variables_json() } ?: "[]" }
+
+    @Volatile var achievementEvents: RetroAchievementEvents? = null
+
+    fun achievementsEnable(userAgent: String, hardcore: Boolean, unofficial: Boolean) =
+        onRenderThread { re_ra_enable(userAgent, hardcore, unofficial) }
+
+    fun achievementsDisable() = onRenderThread { re_ra_disable() }
+
+    fun achievementsLogin(username: String, secret: String, isToken: Boolean) =
+        onRenderThread { re_ra_login(username, secret, isToken) }
+
+    fun achievementsLogout() = onRenderThread { re_ra_logout() }
+
+    /** After the game is running: identifies [path] for RetroAchievements console [consoleId] and loads its set. */
+    fun achievementsLoadGame(path: String, consoleId: Int) = onRenderThread { re_ra_load_game(path, consoleId.toUInt()) }
+
+    fun achievementsSetHardcore(enabled: Boolean) = onRenderThread { re_ra_set_hardcore(enabled) }
+
+    val achievementsHardcore: Boolean get() = re_ra_hardcore()
+
+    /** Answers an "http" event; [status] <= 0 when the request never reached the server. Any thread. */
+    fun achievementsHttpResponse(id: Long, status: Int, body: ByteArray) {
+        if (body.isEmpty()) re_ra_http_response(id, status, null, 0u)
+        else body.usePinned { re_ra_http_response(id, status, it.addressOf(0), body.size.convert()) }
+    }
+
+    fun achievementsListJson(): String = takeString { re_ra_list() } ?: "[]"
+
+    /** 0 when the game may pause now; otherwise frames hardcore asks to play first. */
+    fun achievementsPauseWait(): Int = memScoped {
+        val remaining = alloc<UIntVar>()
+        if (re_ra_can_pause(remaining.ptr)) 0 else remaining.value.toInt().coerceAtLeast(1)
+    }
+
+    /** Keeps the network queue moving while the game is paused; returns the pending events (JSON array) or null. Any thread. */
+    fun achievementsIdle(): String? {
+        re_ra_idle()
+        return takeString { re_ra_events() }
+    }
 
     fun setWidescreen(enabled: Boolean) = setAspectRatio(if (enabled) AspectRatio.FILL else AspectRatio.CORE)
 
@@ -440,6 +589,7 @@ class RetroPlayer(
 
     private fun open(layer: kotlinx.cinterop.CPointer<kotlinx.cinterop.CPointed>?): Boolean = memScoped {
         if (!re_attach_layer(layer)) return false
+        val options = game.options.entries.toList()
         val config = alloc<re_config>().apply {
             core_path = game.corePath.cstr.ptr
             system_dir = game.systemDir.cstr.ptr
@@ -447,8 +597,12 @@ class RetroPlayer(
             language = (NSLocale.currentLocale.languageCode ?: "en").cstr.ptr
             refresh_rate = 60f
             shader = RE_SHADER_SHARP
+            variable_keys = options.map { it.key }.toCStringArray(this@memScoped)
+            variable_values = options.map { it.value }.toCStringArray(this@memScoped)
+            variable_count = options.size
         }
         if (!re_create(config.ptr) || !re_load_game(game.gamePath)) return false
+        applyShader(game.shader)
         game.sram?.load { data, size -> re_unserialize_sram(data, size) }
         if (!re_surface_created()) return false
         (view as GameView).pixelSize.let { (w, h) -> re_surface_changed(w, h) }
@@ -493,6 +647,8 @@ class RetroPlayer(
             }
         }
         re_frame(outgoing, self)
+        if (rumble != null) re_poll_rumble(rumbleCallback, self)
+        achievementEvents?.let { sinkEvents -> takeString { re_ra_events() }?.let(sinkEvents::events) }
         if (sink != null) streamSize.let { (w, h) ->
             // FILL means the frame's shape here, not the phone's: the TV would get a narrow portrait picture.
             if (aspectRatio == AspectRatio.FILL) re_set_aspect_ratio_override(overrideFor(w, h))
@@ -503,6 +659,19 @@ class RetroPlayer(
             ready = true
             dispatch_async(dispatch_get_main_queue()) { onReady?.invoke() }
         }
+    }
+
+    private fun applyShader(shader: RetroShader) = when (shader) {
+        RetroShader.Default -> re_set_shader(0, null)
+        RetroShader.Crt -> re_set_shader(1, null)
+        RetroShader.Lcd -> re_set_shader(2, null)
+        RetroShader.Sharp -> re_set_shader(RE_SHADER_SHARP, null)
+        RetroShader.Upscale -> re_set_shader(5, null)
+        is RetroShader.Retro -> re_set_shader(
+            RE_SHADER_RETRO,
+            "SMOOTH=${if (shader.smooth) 1 else 0};GRID=${shader.grid};SUBPIXEL=${shader.subpixel};" +
+                "SCANLINES=${shader.scanlines};BRIGHTNESS=${shader.brightness}",
+        )
     }
 
     private fun applyAspectRatio() {
@@ -570,6 +739,11 @@ class RetroPlayer(
             sink.audio(NSData.dataWithBytesNoCopy(samples, (count * 4u).convert(), false), count.toInt())
         }
 
+        val rumbleCallback = staticCFunction { context: COpaquePointer?, port: Int, weak: Float, strong: Float ->
+            context!!.asStableRef<RetroPlayer>().get().rumble?.rumble(port, weak, strong)
+            Unit
+        }
+
         val outgoing = staticCFunction { context: COpaquePointer?, type: Int, frame: UInt, value: ULong ->
             val listener = context!!.asStableRef<RetroPlayer>().get().netplayListener ?: return@staticCFunction
             when (type) {
@@ -632,6 +806,13 @@ private inline fun takeBytes(read: (kotlinx.cinterop.CPointer<size_tVar>) -> kot
     val bytes = data.readBytes(size.value.toInt())
     re_free(data)
     bytes
+}
+
+private inline fun takeString(read: () -> kotlinx.cinterop.CPointer<ByteVar>?): String? {
+    val data = read() ?: return null
+    val text = data.toKString()
+    re_free(data)
+    return text
 }
 
 private inline fun <T> ByteArray.load(block: (kotlinx.cinterop.CPointer<UByteVar>, ULong) -> T): T =

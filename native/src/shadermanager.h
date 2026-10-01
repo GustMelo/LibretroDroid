@@ -50,6 +50,8 @@ public:
         SHADER_UPSCALE_CUT = 4,
         SHADER_UPSCALE_CUT2 = 5,
         SHADER_UPSCALE_CUT3 = 6,
+        /** One pass that combines what the params switch on: smooth or sharp scaling, LCD grid, RGB subpixels, scanlines. */
+        SHADER_RETRO = 7,
     };
 
     struct Config {
@@ -68,6 +70,9 @@ private:
     static const std::string defaultSharpFragment;
     static const std::string crtShaderFragment;
     static const std::string lcdShaderFragment;
+
+    static const std::unordered_map<std::string, std::string> retroParams;
+    static const std::string retroFragment;
 
     static const std::unordered_map<std::string, std::string> cutUpscaleParams;
     static const std::string cutUpscaleVertex;
