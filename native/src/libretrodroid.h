@@ -81,6 +81,11 @@ public:
     bool linkLoadSave(int player, const int8_t *data, size_t size);
     bool linkKeep(int player);
 
+    /** The running game reads e-Reader cards (it is the e-Reader cartridge, on a core that emulates its scanner). */
+    bool ereaderSupported();
+    /** Puts a card's dot code strip (.raw) in front of the e-Reader's scanner; false when the game has none. */
+    bool ereaderScan(const int8_t *data, size_t size);
+
     void onSurfaceCreated();
     void onSurfaceChanged(unsigned int width, unsigned int height);
 

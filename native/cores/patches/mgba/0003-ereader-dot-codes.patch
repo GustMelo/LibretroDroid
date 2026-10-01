@@ -1,0 +1,30 @@
+diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
+index e50b8f4f8..c44498179 100644
+--- a/src/platform/libretro/libretro.c
++++ b/src/platform/libretro/libretro.c
+@@ -2599,3 +2599,25 @@ static int32_t _readGyroZ(struct mRotationSource* source) {
+ 	UNUSED(source);
+ 	return gyroZ;
+ }
++
++#ifdef M_CORE_GBA
++#include <mgba/internal/gba/cart/ereader.h>
++
++/* GameInPocket: e-Reader dot codes. True when the running game is the e-Reader (its cartridge has the scanner). */
++RETRO_API bool retro_ereader_supported(void) {
++	if (!core || core->platform(core) != mPLATFORM_GBA) {
++		return false;
++	}
++	struct GBA* gba = core->board;
++	return (gba->memory.hw.devices & HW_EREADER) != 0;
++}
++
++/* Queues a card's dot code strip (a .raw dump, up to 2912 bytes) for the e-Reader to read on its next scan. */
++RETRO_API bool retro_ereader_queue_card(const void* data, size_t size) {
++	if (!retro_ereader_supported() || !data || !size) {
++		return false;
++	}
++	GBACartEReaderQueueCard(core->board, data, size);
++	return true;
++}
++#endif

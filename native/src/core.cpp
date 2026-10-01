@@ -74,6 +74,13 @@ void Core::open(const std::string& soCorePath) {
         !retro_link_load_save || !retro_link_keep) {
         retro_link_max_players = nullptr;
     }
+
+    retro_ereader_supported = (bool (*)()) dlsym(libHandle, "retro_ereader_supported");
+    retro_ereader_queue_card = (bool (*)(const void*, size_t)) dlsym(libHandle, "retro_ereader_queue_card");
+    if (!retro_ereader_supported || !retro_ereader_queue_card) {
+        retro_ereader_supported = nullptr;
+        retro_ereader_queue_card = nullptr;
+    }
 }
 
 void Core::close() {

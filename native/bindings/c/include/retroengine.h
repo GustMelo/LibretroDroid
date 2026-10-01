@@ -77,6 +77,10 @@ void re_link_set_grid(bool grid);
 bool re_link_load_save(int player, const uint8_t *data, size_t size);
 /* Console [player] goes on alone as console 0, with its state and save. */
 bool re_link_keep(int player);
+
+/* e-Reader: whether the running game scans cards, and queue one card's .raw dot code strip. */
+bool re_ereader_supported(void);
+bool re_ereader_scan(const uint8_t *data, size_t size);
 void re_free(void *data);
 void re_reset(void);
 

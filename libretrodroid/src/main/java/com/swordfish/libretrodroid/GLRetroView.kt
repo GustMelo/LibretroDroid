@@ -286,6 +286,12 @@ class GLRetroView(
         codes.forEachIndexed { index, code -> LibretroDroid.setCheat(index, true, code) }
     }
 
+    /** The running game is the e-Reader and can scan cards. */
+    val ereaderSupported: Boolean get() = runOnEmulationThread(true) { LibretroDroid.ereaderSupported() }
+
+    /** Puts a card's dot code strip (.raw) in front of the e-Reader; false when the game has no scanner. */
+    fun ereaderScan(card: ByteArray): Boolean = runOnEmulationThread(true) { LibretroDroid.ereaderScan(card) }
+
     /** Rumble events on [getRumbleEvents]: on while a game asks for them and the player wants them. */
     fun setRumbleEnabled(enabled: Boolean) = LibretroDroid.setRumbleEnabled(enabled)
 

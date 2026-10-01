@@ -57,6 +57,10 @@ public:
     bool (*retro_link_load_save)(unsigned player, const void *data, size_t size) = nullptr;
     bool (*retro_link_keep)(unsigned player) = nullptr;
 
+    // e-Reader (optional, mgba): the running game's scanner and its queue of dot code cards.
+    bool (*retro_ereader_supported)(void) = nullptr;
+    bool (*retro_ereader_queue_card)(const void *data, size_t size) = nullptr;
+
     Core(const std::string& soCorePath);
     ~Core();
 

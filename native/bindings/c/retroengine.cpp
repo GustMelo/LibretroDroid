@@ -239,6 +239,12 @@ void re_link_set_grid(bool grid) { LibretroDroid::getInstance().linkSetGrid(grid
 
 bool re_link_keep(int player) { return LibretroDroid::getInstance().linkKeep(player); }
 
+bool re_ereader_supported(void) { return LibretroDroid::getInstance().ereaderSupported(); }
+
+bool re_ereader_scan(const uint8_t *data, size_t size) {
+    return LibretroDroid::getInstance().ereaderScan(reinterpret_cast<const int8_t *>(data), size);
+}
+
 bool re_link_load_save(int player, const uint8_t *data, size_t size) {
     return LibretroDroid::getInstance().linkLoadSave(player, (const int8_t *) data, size);
 }

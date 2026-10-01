@@ -21,6 +21,8 @@ import com.libretrodroid.engine.native.re_frame
 import com.libretrodroid.engine.native.re_jit_available
 import com.libretrodroid.engine.native.re_set_variable
 import com.libretrodroid.engine.native.re_link_keep
+import com.libretrodroid.engine.native.re_ereader_supported
+import com.libretrodroid.engine.native.re_ereader_scan
 import com.libretrodroid.engine.native.re_link_load_save
 import com.libretrodroid.engine.native.re_link_max_players
 import com.libretrodroid.engine.native.re_link_set_grid
@@ -267,6 +269,12 @@ class RetroPlayer(
         remoteButtons[port].value = buttons and 0xffff
         remoteAxes[port].value = pack(lx, ly, rx, ry)
     }
+
+    /** The running game is the e-Reader and can scan cards. */
+    val ereaderSupported: Boolean get() = onRenderThread { re_ereader_supported() }
+
+    /** Puts a card's dot code strip (.raw) in front of the e-Reader; false when the game has no scanner. */
+    fun ereaderScan(card: ByteArray): Boolean = onRenderThread { card.isNotEmpty() && card.load { data, size -> re_ereader_scan(data, size) } }
 
     /** Up to four players on cores with a multitap; returns whether it is active. */
     fun setMultitap(enabled: Boolean): Boolean = onRenderThread { re_set_multitap(enabled) }

@@ -199,6 +199,11 @@ public class LibretroDroid {
     public static native boolean linkLoadSave(int player, byte[] save);
     public static native boolean linkKeep(int player);
 
+    /** The running game scans e-Reader cards. */
+    public static native boolean ereaderSupported();
+    /** Queues one card's dot code strip (.raw) for the e-Reader; false when the game has no scanner. */
+    public static native boolean ereaderScan(byte[] card);
+
     public static native void updateVariable(Variable variable);
     public static native Variable[] getVariables();
 

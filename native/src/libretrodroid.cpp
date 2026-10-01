@@ -217,6 +217,16 @@ bool LibretroDroid::linkLoadSave(int player, const int8_t* data, size_t size) {
     return core && core->retro_link_max_players && player >= 0 && core->retro_link_load_save((unsigned) player, data, size);
 }
 
+bool LibretroDroid::ereaderSupported() {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return core && core->retro_ereader_supported && core->retro_ereader_supported();
+}
+
+bool LibretroDroid::ereaderScan(const int8_t* data, size_t size) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    return core && core->retro_ereader_queue_card && core->retro_ereader_queue_card(data, size);
+}
+
 bool LibretroDroid::linkKeep(int player) {
     std::lock_guard<std::mutex> lock(coreLock);
     return core && core->retro_link_max_players && player >= 0 && core->retro_link_keep((unsigned) player);

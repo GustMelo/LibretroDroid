@@ -821,6 +821,17 @@ static std::string stringFrom(JNIEnv* env, jstring text) {
     return value.stdString();
 }
 
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_ereaderSupported(JNIEnv*, jclass) {
+    return LibretroDroid::getInstance().ereaderSupported();
+}
+
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_ereaderScan(JNIEnv* env, jclass, jbyteArray card) {
+    jsize length = env->GetArrayLength(card);
+    std::vector<int8_t> bytes(static_cast<size_t>(length));
+    env->GetByteArrayRegion(card, 0, length, reinterpret_cast<jbyte*>(bytes.data()));
+    return LibretroDroid::getInstance().ereaderScan(bytes.data(), bytes.size());
+}
+
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setSpeed(JNIEnv*, jclass, jfloat speed) {
     LibretroDroid::getInstance().setSpeed(speed);
 }
