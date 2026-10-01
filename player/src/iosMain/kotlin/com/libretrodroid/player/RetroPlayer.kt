@@ -53,6 +53,7 @@ import com.libretrodroid.engine.native.re_unserialize_sram
 import com.libretrodroid.engine.native.re_set_speed
 import com.libretrodroid.engine.native.re_effective_speed
 import com.libretrodroid.engine.native.re_set_rewind
+import com.libretrodroid.engine.native.re_set_run_ahead
 import com.libretrodroid.engine.native.re_set_rewinding
 import com.libretrodroid.engine.native.re_rewind_seconds
 import com.libretrodroid.engine.native.re_sensors_requested
@@ -369,6 +370,9 @@ class RetroPlayer(
 
     /** Frames the core ran per displayed frame lately (what fast-forward reached); negative while rewinding. */
     val effectiveSpeed: Float get() = re_effective_speed()
+
+    /** Run-ahead frames (0..6): the picture shows that many frames ahead, removing the games' own input lag. */
+    fun setRunAhead(frames: Int) = re_set_run_ahead(frames.coerceAtLeast(0).toUInt())
 
     /** Keeps the last [budgetBytes] of play to rewind through; 0 turns it off and frees it. */
     fun setRewind(budgetBytes: Long) = re_set_rewind(budgetBytes.coerceAtLeast(0).toULong())

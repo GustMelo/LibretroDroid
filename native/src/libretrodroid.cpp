@@ -356,6 +356,9 @@ void LibretroDroid::create(
     frameCostUs = 0.0;
     rewinding = false;
     rewind.clear();
+    runAhead = 0;
+    runAheadBroken = false;
+    runAheadState.clear();
 
     core = std::make_unique<Core>(soFilePath);
 
@@ -665,6 +668,10 @@ void LibretroDroid::runFrames(unsigned displayFrames) {
 }
 
 void LibretroDroid::runCoreFrame(bool shown, bool audible) {
+    if (shown && runAheadAllowedLocked()) {
+        runAheadFrameLocked(audible);
+        return;
+    }
     skipVideoFrame = !shown;
     skipAudioFrame = !audible;
     Environment::getInstance().setSkipFrame(!shown, !audible);
@@ -673,6 +680,59 @@ void LibretroDroid::runCoreFrame(bool shown, bool audible) {
     skipVideoFrame = false;
     skipAudioFrame = false;
     afterCoreFrame();
+}
+
+void LibretroDroid::setRunAhead(unsigned frames) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    runAhead = std::min(frames, MAX_RUN_AHEAD);
+    runAheadBroken = false;
+}
+
+bool LibretroDroid::runAheadAllowedLocked() const {
+    return runAhead > 0 && !runAheadBroken && core && !rewinding && !Netplay::getInstance().isActive() &&
+           !Netpacket::getInstance().isRunning();
+}
+
+/**
+ * One displayed frame with run-ahead: the real frame (its sound is what plays), a state save, [runAhead] - 1 hidden
+ * frames and a shown one with the same input, then the real state back. The save doubles as the rewind capture.
+ */
+void LibretroDroid::runAheadFrameLocked(bool audible) {
+    Environment& environment = Environment::getInstance();
+    skipVideoFrame = true;
+    skipAudioFrame = !audible;
+    environment.setSkipFrame(true, !audible);
+    core->retro_run();
+    Achievements::getInstance().doFrame();
+
+    size_t size = core->retro_serialize_size();
+    runAheadState.resize(size);
+    if (size == 0 || !core->retro_serialize(runAheadState.data(), size)) {
+        // A core that can't save its state can't run ahead: play normally from now on.
+        LOGE("Run-ahead off: the core can't save its state");
+        runAheadBroken = true;
+        skipVideoFrame = false;
+        skipAudioFrame = false;
+        environment.setSkipFrame(false, false);
+        return;
+    }
+    pushRewindLocked(runAheadState.data(), size);
+
+    skipAudioFrame = true;
+    for (unsigned i = 1; i < runAhead; i++) {
+        environment.setSkipFrame(true, true);
+        core->retro_run();
+    }
+    skipVideoFrame = false;
+    environment.setSkipFrame(false, true);
+    core->retro_run();
+    environment.setSkipFrame(false, false);
+    skipAudioFrame = false;
+
+    if (!core->retro_unserialize(runAheadState.data(), size)) {
+        LOGE("Run-ahead off: the core couldn't load its state back");
+        runAheadBroken = true;
+    }
 }
 
 void LibretroDroid::afterCoreFrame() {
@@ -698,10 +758,21 @@ void LibretroDroid::captureRewindLocked() {
     if (size == 0) return;
     rewindScratch.resize(size);
     if (!core->retro_serialize(rewindScratch.data(), size)) return;
+    rewindCountdown = 0;
+    pushRewindLocked(rewindScratch.data(), size);
+}
+
+/** A state of the real frame for the rewind history, when its interval is due. */
+void LibretroDroid::pushRewindLocked(const uint8_t* state, size_t size) {
+    if (!rewindAllowedLocked()) return;
+    if (rewindCountdown > 0) {
+        rewindCountdown--;
+        return;
+    }
     // Large states (PlayStation's 4.5 MB) are recorded less often: the cost per played frame stays near a GBA's.
     rewindInterval = size <= (1u << 20) ? 1 : size <= (3u << 20) ? 2 : 3;
     rewindCountdown = rewindInterval - 1;
-    rewind.push(rewindScratch.data(), size);
+    rewind.push(state, size);
 }
 
 void LibretroDroid::stepRewindLocked() {

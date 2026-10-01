@@ -374,6 +374,8 @@ void re_set_speed(float speed) { LibretroDroid::getInstance().setSpeed(speed); }
 
 float re_effective_speed(void) { return LibretroDroid::getInstance().effectiveSpeed(); }
 
+void re_set_run_ahead(unsigned frames) { LibretroDroid::getInstance().setRunAhead(frames); }
+
 void re_set_rewind(size_t budget_bytes) { LibretroDroid::getInstance().setRewind(budget_bytes); }
 
 void re_set_rewinding(bool rewinding) { LibretroDroid::getInstance().setRewinding(rewinding); }

@@ -840,6 +840,10 @@ JNIEXPORT jfloat JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_effectiv
     return LibretroDroid::getInstance().effectiveSpeed();
 }
 
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setRunAhead(JNIEnv*, jclass, jint frames) {
+    LibretroDroid::getInstance().setRunAhead(frames > 0 ? static_cast<unsigned>(frames) : 0);
+}
+
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setRewind(JNIEnv*, jclass, jlong budgetBytes) {
     LibretroDroid::getInstance().setRewind(budgetBytes > 0 ? static_cast<size_t>(budgetBytes) : 0);
 }

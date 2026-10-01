@@ -105,6 +105,9 @@ class GLRetroView(
     /** Frames the core ran per displayed frame lately (what fast-forward reached); negative while rewinding. */
     val effectiveSpeed: Float get() = LibretroDroid.effectiveSpeed()
 
+    /** Run-ahead frames (0..6): the picture shows that many frames ahead, removing the games' own input lag. */
+    var runAhead: Int by Delegates.observable(0) { _, _, value -> LibretroDroid.setRunAhead(value) }
+
     /** Keeps the last [budgetBytes] of play to rewind through; 0 turns rewind off and frees it. */
     fun setRewind(budgetBytes: Long) = LibretroDroid.setRewind(budgetBytes)
 

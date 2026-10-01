@@ -133,6 +133,9 @@ void re_set_speed(float speed);
 /* Frames run per displayed frame lately (negative while rewinding). */
 float re_effective_speed(void);
 
+/* Run-ahead: show the frame `frames` ahead (0..6) to remove the games' built-in input lag; 0 turns it off. */
+void re_set_run_ahead(unsigned frames);
+
 /* Rewind history kept within budget_bytes; 0 turns it off. */
 void re_set_rewind(size_t budget_bytes);
 void re_set_rewinding(bool rewinding);

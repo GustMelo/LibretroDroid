@@ -145,6 +145,9 @@ public class LibretroDroid {
     /** Frames run per displayed frame lately; negative while rewinding. */
     public static native float effectiveSpeed();
 
+    /** Shows the frame `frames` ahead (0..6) to remove the games' built-in input lag; 0 turns it off. */
+    public static native void setRunAhead(int frames);
+
     /** Keeps the last budgetBytes of play for rewinding; 0 turns rewind off. */
     public static native void setRewind(long budgetBytes);
     public static native void setRewinding(boolean rewinding);

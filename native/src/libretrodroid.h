@@ -153,6 +153,13 @@ public:
     /** Frames the core ran per displayed frame lately: what fast-forward actually reached. */
     float effectiveSpeed() const { return measuredSpeed; }
 
+    /**
+     * Run-ahead: shows the frame [frames] ahead of the one the console really is on, so a button shows its effect
+     * that many frames sooner, removing the lag the original games had built in. 0 turns it off. Each displayed frame
+     * then costs frames + 1 core runs plus a state save and load; off during netplay, link and rewinding.
+     */
+    void setRunAhead(unsigned frames);
+
     /** Records the last [budgetBytes] of play to step back through; 0 turns rewind off and frees it. */
     void setRewind(size_t budgetBytes);
     /** While true every displayed frame steps one recorded state back instead of playing. */
@@ -178,6 +185,7 @@ public:
 
     static constexpr float MAX_SPEED = 100.0f;
     static constexpr float AUDIBLE_SPEED = 4.0f;
+    static constexpr unsigned MAX_RUN_AHEAD = 6;
 
     void setAudioEnabled(bool enabled);
 
@@ -222,6 +230,12 @@ private:
     unsigned rewindCountdown = 0;
     std::vector<uint8_t> rewindScratch;
     void captureRewindLocked();
+    unsigned runAhead = 0;
+    bool runAheadBroken = false;
+    std::vector<uint8_t> runAheadState;
+    bool runAheadAllowedLocked() const;
+    void runAheadFrameLocked(bool audible);
+    void pushRewindLocked(const uint8_t* state, size_t size);
     void stepRewindLocked();
     bool rewindAllowedLocked() const;
     double contentFps = 60.0;
