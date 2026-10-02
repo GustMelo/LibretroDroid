@@ -320,6 +320,12 @@ class GLRetroView(
         }
     }
 
+    /** A bounded copy of console RAM; offsets refer to the core's SYSTEM_RAM region, not CPU addresses. */
+    fun readSystemRam(offset: Int, length: Int, visibleOffset: Int = -1, visibleValue: Int = 0): ByteArray = runOnEmulationThread(true) {
+        require(offset >= 0 && length in 1..65536 && visibleOffset >= -1 && visibleValue in 0..255)
+        LibretroDroid.readSystemRam(offset, length, visibleOffset, visibleValue) ?: byteArrayOf()
+    }
+
     fun serializeSRAM(useEmulationThread: Boolean = true): ByteArray {
         return runOnEmulationThread(useEmulationThread) {
             LibretroDroid.serializeSRAM()

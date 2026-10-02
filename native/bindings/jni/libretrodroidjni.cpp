@@ -297,6 +297,21 @@ JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkLo
     return loaded;
 }
 
+JNIEXPORT jbyteArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_readSystemRam(
+    JNIEnv* env, jclass obj, jint offset, jint length, jint visibleOffset, jint visibleValue
+) {
+    if (offset < 0 || length <= 0 || length > 65536 || visibleOffset < -1 || visibleValue < 0 || visibleValue > 255) return nullptr;
+    try {
+        const auto data = LibretroDroid::getInstance().readSystemRam(offset, length, visibleOffset, visibleValue);
+        jbyteArray result = env->NewByteArray(static_cast<jsize>(data.size()));
+        if (result && !data.empty()) env->SetByteArrayRegion(result, 0, data.size(), data.data());
+        return result;
+    } catch (const std::exception& exception) {
+        LOGE("Error reading system RAM: %s", exception.what());
+        return nullptr;
+    }
+}
+
 JNIEXPORT jbyteArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_serializeSRAM(
     JNIEnv* env,
     jclass obj

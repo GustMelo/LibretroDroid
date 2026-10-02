@@ -70,6 +70,7 @@ public:
     std::pair<int8_t*, size_t> serializeState();
     bool unserializeState(int8_t *data, size_t size);
 
+    std::vector<int8_t> readSystemRam(size_t offset, size_t length, int visibleOffset, int visibleValue);
     std::pair<int8_t *, size_t> serializeSRAM();
     bool unserializeSRAM(int8_t *data, size_t size);
 

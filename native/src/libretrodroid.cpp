@@ -28,6 +28,7 @@
 #include <unordered_set>
 
 #include "libretrodroid.h"
+#include "system_ram.h"
 #include "utils/libretrodroidexception.h"
 #include "log.h"
 #include "core.h"
@@ -230,6 +231,14 @@ bool LibretroDroid::ereaderScan(const int8_t* data, size_t size) {
 bool LibretroDroid::linkKeep(int player) {
     std::lock_guard<std::mutex> lock(coreLock);
     return core && core->retro_link_max_players && player >= 0 && core->retro_link_keep((unsigned) player);
+}
+
+std::vector<int8_t> LibretroDroid::readSystemRam(size_t offset, size_t length, int visibleOffset, int visibleValue) {
+    std::lock_guard<std::mutex> lock(coreLock);
+    if (!core) return {};
+    const size_t size = core->retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM);
+    const auto* data = static_cast<const int8_t*>(core->retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM));
+    return copySystemRam(data, size, offset, length, visibleOffset, visibleValue);
 }
 
 std::pair<int8_t*, size_t> LibretroDroid::serializeSRAM() {
