@@ -241,7 +241,16 @@ float Video::getTextureHeight() {
 
 void Video::onNewFrame(const void *data, unsigned width, unsigned height, size_t pitch) {
     if (data != nullptr) {
+        if (data != reinterpret_cast<const void*>(-1) && VideoObservation::instance().takeRequest()) {
+            VideoObservation::instance().publish(data, width, height, pitch,
+                static_cast<VideoObservation::Format>(observationFormat), observationAspect,
+                static_cast<unsigned>(std::lround(observationRotation / 1.57079632679f)));
+        }
         renderer->onNewFrame(data, width, height, pitch);
+        if (data == reinterpret_cast<const void*>(-1)) {
+            observationGpu.capture(renderer->getFramebuffer(), width, height, observationAspect,
+                static_cast<unsigned>(std::lround(observationRotation / 1.57079632679f)), observationBottomUp);
+        }
         isDirty = true;
     }
 }
@@ -264,6 +273,7 @@ void Video::updateRendererSize(unsigned int width, unsigned int height) {
 }
 
 void Video::updateRotation(float rotation) {
+    observationRotation = rotation;
     videoLayout.updateRotation(rotation);
 }
 
@@ -295,6 +305,10 @@ Video::Video(
 
     glUseProgram(0);
 
+    observationFormat = renderingOptions.pixelFormat;
+    observationRotation = rotation;
+    observationBottomUp = bottomLeftOrigin;
+    VideoObservation::instance().clear();
     initializeRenderer(renderingOptions);
 }
 
@@ -326,6 +340,7 @@ void Video::initializeRenderer(RenderingOptions renderingOptions) {
 }
 
 void Video::updateAspectRatio(float aspectRatio) {
+    observationAspect = aspectRatio;
     videoLayout.updateAspectRatio(aspectRatio);
 }
 }

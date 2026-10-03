@@ -7,6 +7,7 @@ import com.libretrodroid.engine.native.RE_NETPLAY_STATE_HASH
 import com.libretrodroid.engine.native.RE_SHADER_SHARP
 import com.libretrodroid.engine.native.re_attach_layer
 import com.libretrodroid.engine.native.re_capture
+import com.libretrodroid.engine.native.re_observe_video
 import com.libretrodroid.engine.native.re_disk_count
 import com.libretrodroid.engine.native.re_disk_current
 import com.libretrodroid.engine.native.re_disk_set
@@ -471,6 +472,9 @@ class RetroPlayer(
     fun disks(): Pair<Int, Int> = onRenderThread { re_disk_count() to re_disk_current() }
 
     fun setDisk(index: Int) = onRenderThread { re_disk_set(index.toUInt()) }
+
+    /** Immutable observation, independent of the EGL surface and render queue. */
+    fun observeVideo(): ByteArray? = takeBytes { re_observe_video(it) }
 
     fun capture(): RetroFrame? = onRenderThread {
         memScoped {

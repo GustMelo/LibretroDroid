@@ -21,6 +21,7 @@
 #include "utils/rect.h"
 #include "audio_tap.h"
 #include "streamcapture.h"
+#include "videoobservation.h"
 #include "achievements.h"
 
 using namespace libretrodroid;
@@ -263,6 +264,17 @@ void re_reset(void) { guarded("reset", [] { LibretroDroid::getInstance().reset()
 
 void re_redraw(void) {
     if (guarded("redraw", [] { LibretroDroid::getInstance().redraw(); })) eglSwapBuffers(egl.display, egl.surface);
+}
+
+uint8_t *re_observe_video(size_t *size) {
+    *size = 0;
+    const auto packet = VideoObservation::instance().request();
+    if (!packet) return nullptr;
+    auto* result = static_cast<uint8_t*>(std::malloc(packet->size()));
+    if (!result) return nullptr;
+    std::memcpy(result, packet->data(), packet->size());
+    *size = packet->size();
+    return result;
 }
 
 uint8_t *re_capture(int *width, int *height) {

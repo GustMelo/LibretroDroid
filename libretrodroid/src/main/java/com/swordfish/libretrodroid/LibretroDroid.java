@@ -194,6 +194,8 @@ public class LibretroDroid {
     public static native void setCheat(int index, boolean enable, String code);
     public static native void resetCheat();
 
+    public static native byte[] observeVideo();
+
     public static native byte[] readSystemRam(int offset, int length, int visibleOffset, int visibleValue);
     public static native byte[] serializeSRAM();
     public static native boolean unserializeSRAM(byte[] sram);

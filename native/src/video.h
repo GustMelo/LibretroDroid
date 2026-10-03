@@ -27,6 +27,8 @@
 #include "utils/rect.h"
 #include "immersivemode.h"
 #include "videolayout.h"
+#include "videoobservation.h"
+#include "videoobservergpu.h"
 
 namespace libretrodroid {
 class Video {
@@ -117,6 +119,11 @@ private:
     ImmersiveMode immersiveMode;
     VideoLayout videoLayout;
 
+    VideoObserverGpu observationGpu;
+    int observationFormat = 0;
+    float observationAspect = 1;
+    float observationRotation = 0;
+    bool observationBottomUp = false;
     Renderer* renderer;
 };
 }

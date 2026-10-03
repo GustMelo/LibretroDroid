@@ -85,6 +85,7 @@ void re_free(void *data);
 void re_reset(void);
 
 void re_redraw(void);
+uint8_t *re_observe_video(size_t *size);
 uint8_t *re_capture(int *width, int *height);
 
 int re_disk_count(void);

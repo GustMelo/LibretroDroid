@@ -1,3 +1,4 @@
+#include "videoobservation.h"
 /*
  *     Copyright (C) 2021  Filippo Scognamiglio
  *
@@ -295,6 +296,14 @@ JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_linkLo
     bool loaded = LibretroDroid::getInstance().linkLoadSave(player, data, size);
     env->ReleaseByteArrayElements(save, data, JNI_ABORT);
     return loaded;
+}
+
+JNIEXPORT jbyteArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_observeVideo(JNIEnv* env, jclass) {
+    const auto packet = VideoObservation::instance().request();
+    if (!packet) return nullptr;
+    auto result = env->NewByteArray(static_cast<jsize>(packet->size()));
+    if (result) env->SetByteArrayRegion(result, 0, packet->size(), reinterpret_cast<const jbyte*>(packet->data()));
+    return result;
 }
 
 JNIEXPORT jbyteArray JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_readSystemRam(
