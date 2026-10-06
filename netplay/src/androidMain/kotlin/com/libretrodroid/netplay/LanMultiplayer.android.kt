@@ -14,7 +14,12 @@ fun LanMultiplayer(
 ): LanMultiplayer {
     val app = context.applicationContext
     val wifiLock = app.getSystemService(WifiManager::class.java)
-        .createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "LibretroDroid:netplay")
+        // The low-latency lock arrived in Android 10; older ones refuse the mode when the lock is taken.
+        .createWifiLock(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            else @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+            "LibretroDroid:netplay",
+        )
         .apply { setReferenceCounted(false) }
     return LanMultiplayer(
         emulator = emulator,
