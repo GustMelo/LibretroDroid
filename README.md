@@ -29,7 +29,7 @@ copyright notices are preserved. This is an independent fork, not an official re
   - A combinable one-pass shader (`SHADER_RETRO`: sharp or smooth, LCD grid, RGB subpixels, scanlines), cheats and
     core options with their descriptions on iOS too.
 
-Supported builds: Android arm64-v8a; iOS arm64 device and arm64 simulator.
+Supported builds: Android arm64-v8a and armeabi-v7a (API 28+); iOS arm64 device and arm64 simulator.
 
 ## Build and publish
 

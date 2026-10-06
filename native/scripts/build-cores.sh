@@ -11,6 +11,9 @@ WORK="${CORES_WORK:-$HOME/.cache/libretrodroid/cores}"
 JOBS="${JOBS:-3}"
 SIMULATOR="${SIMULATOR:-1}"
 IOS_MIN="15.0"
+# 32-bit ARM is what most Android TV boxes run, even on 64-bit chips.
+ANDROID_ABIS="${ANDROID_ABIS:-arm64-v8a armeabi-v7a}"
+ANDROID_API=28
 
 mkdir -p "$OUT" "$WORK"
 OUT="$(cd "$OUT" && pwd)"
@@ -45,25 +48,31 @@ fingerprint() { # core, commit, build, extra
 }
 
 build_android() { # core, src, key, build, jni
-  local target="$OUT/android/arm64-v8a/lib$1_libretro_android.so" stamp="$OUT/android/arm64-v8a/.$1.build"
-  [ -f "$target" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$3" ] && return
+  local abi
+  for abi in $ANDROID_ABIS; do build_android_abi "$@" "$abi"; done
+}
+
+build_android_abi() { # core, src, key, build, jni, abi
+  local abi="$6" key="$3-api$ANDROID_API"
+  local target="$OUT/android/$abi/lib$1_libretro_android.so" stamp="$OUT/android/$abi/.$1.build"
+  [ -f "$target" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$key" ] && return
   mkdir -p "$(dirname "$target")"
   if [[ "$4" == cmake:* ]]; then
-    local build="$WORK/build/$1-android"
+    local build="$WORK/build/$1-android-$abi"
     "$(cmake_bin)/cmake" -S "$2" -B "$build" -G Ninja -DCMAKE_MAKE_PROGRAM="$(cmake_bin)/ninja" \
-      -DCMAKE_TOOLCHAIN_FILE="$(ndk_dir)/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a \
-      -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release ${4#cmake:}
+      -DCMAKE_TOOLCHAIN_FILE="$(ndk_dir)/build/cmake/android.toolchain.cmake" -DANDROID_ABI="$abi" \
+      -DANDROID_PLATFORM="android-$ANDROID_API" -DCMAKE_BUILD_TYPE=Release ${4#cmake:}
     "$(cmake_bin)/ninja" -C "$build" -j "$JOBS"
     # A fork may keep its upstream library name.
     cp "$(find "$build" -name "*_libretro*.so" | head -1)" "$target"
     "$(ls "$(ndk_dir)"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)" --strip-unneeded "$target"
   else
-    rm -rf "$WORK/libs/$1" "$WORK/obj/$1"
-    "$(ndk_dir)/ndk-build" -C "$2/$5" -j"$JOBS" APP_ABI=arm64-v8a APP_PLATFORM=android-29 \
-      NDK_OUT="$WORK/obj/$1" NDK_LIBS_OUT="$WORK/libs/$1"
-    cp "$(find "$WORK/libs/$1/arm64-v8a" -name "*.so" | head -1)" "$target"
+    rm -rf "$WORK/libs/$1-$abi" "$WORK/obj/$1-$abi"
+    "$(ndk_dir)/ndk-build" -C "$2/$5" -j"$JOBS" APP_ABI="$abi" APP_PLATFORM="android-$ANDROID_API" \
+      NDK_OUT="$WORK/obj/$1-$abi" NDK_LIBS_OUT="$WORK/libs/$1-$abi"
+    cp "$(find "$WORK/libs/$1-$abi/$abi" -name "*.so" | head -1)" "$target"
   fi
-  echo "$3" > "$stamp"
+  echo "$key" > "$stamp"
 }
 
 build_ios_slice() { # core, src, build, extra, sdk(iphoneos|iphonesimulator)
