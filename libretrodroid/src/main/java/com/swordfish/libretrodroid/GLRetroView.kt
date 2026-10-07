@@ -28,7 +28,11 @@ import android.content.Context
 import android.graphics.PointF
 import android.graphics.RectF
 import android.opengl.GLSurfaceView
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Process
 import android.util.Log
+import android.view.Choreographer
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -208,8 +212,49 @@ class GLRetroView(
         preserveEGLContextOnPause = true
         setEGLContextClientVersion(openGLESVersion)
         setRenderer(Renderer())
+        // One frame per refresh, asked for by [FramePacer]; see there.
+        renderMode = RENDERMODE_WHEN_DIRTY
         keepScreenOn = true
     }
+
+    /**
+     * Asks for a frame at every refresh of the display, on a thread of its own. Rendering continuously instead, the
+     * GL thread ran each frame as soon as the last was handed over and was only held back by the screen's queue being
+     * full: every finished frame then waited behind another one, a whole refresh more between a press and its
+     * picture (what Android's frame pacing guide calls buffer stuffing). Started by a refresh, a frame is drawn into
+     * an empty queue and is the next one shown. A game paced by the clock keeps its own time: it is simply drawn
+     * when it is due.
+     */
+    private inner class FramePacer : Choreographer.FrameCallback {
+        private val thread = HandlerThread("retro-vsync", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
+        private val handler = Handler(thread.looper)
+        @Volatile private var running = false
+
+        fun start() = handler.post {
+            if (!running) {
+                running = true
+                Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+
+        fun stop() = handler.post {
+            running = false
+            Choreographer.getInstance().removeFrameCallback(this)
+        }
+
+        fun quit() {
+            stop()
+            thread.quitSafely()
+        }
+
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!running) return
+            requestRender()
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
+    private val framePacer = FramePacer()
 
     @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
     fun onCreate(lifecycleOwner: LifecycleOwner) = catchExceptions {
@@ -241,6 +286,7 @@ class GLRetroView(
         LibretroDroid.setStreamAudio(false)
         LibretroDroid.destroy()
         lifecycle = null
+        framePacer.quit()
     }
 
     private fun getDeviceLanguage() = Locale.getDefault().language
@@ -678,12 +724,14 @@ class GLRetroView(
             LibretroDroid.resume()
             onResume()
             isEmulationReady = true
+            framePacer.start()
         }
 
         @OnLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         private fun pause() = catchExceptions {
             if (linkSession != null) stopLink()
             isEmulationReady = false
+            framePacer.stop()
             onPause()
             LibretroDroid.pause()
         }
