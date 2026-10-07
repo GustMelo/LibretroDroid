@@ -247,14 +247,55 @@ class GLRetroView(
             thread.quitSafely()
         }
 
+        private var lastRefreshNanos = 0L
+        private val render = Runnable { requestRender() }
+
         override fun doFrame(frameTimeNanos: Long) {
             if (!running) return
-            requestRender()
+            val period = frameTimeNanos - lastRefreshNanos
+            lastRefreshNanos = frameTimeNanos
+            val wait = lateInputWaitNanos(frameTimeNanos, period)
+            if (wait >= NANOS_PER_MILLI) handler.postDelayed(render, wait / NANOS_PER_MILLI) else requestRender()
             Choreographer.getInstance().postFrameCallback(this)
         }
     }
 
     private val framePacer = FramePacer()
+
+    /**
+     * Starts each frame as late in the refresh as it still reaches the screen on time, instead of at its start, so
+     * the pads are read closer to the picture they change (RetroArch's automatic frame delay): up to about 8 ms less
+     * between a press and its picture on light systems. It measures what a frame costs and backs off when one comes
+     * out late. On by default; only at normal speed, with frames paced by a screen of about the game's own rate.
+     */
+    @Volatile var lateInput = true
+
+    /** What a frame takes from reading the pads to being drawn, lately, and the room left before the refresh. */
+    @Volatile private var frameCostNanos = 0L
+    @Volatile private var frameMarginNanos = LATCH_MARGIN_NANOS
+    /** When the frame being drawn has to be ready: the refresh after the one that started it. */
+    @Volatile private var frameDeadlineNanos = 0L
+
+    private fun lateInputWaitNanos(refreshNanos: Long, periodNanos: Long): Long {
+        frameDeadlineNanos = refreshNanos + periodNanos
+        val cost = frameCostNanos
+        // A faster screen than the game (120 Hz) leaves the clock pacing it: nothing to wait for.
+        if (!lateInput || !vsync || speed != 1f || frameSpeed != 1 || rewinding || linkSession != null || cost <= 0 ||
+            periodNanos !in LATCH_PERIOD_NANOS) return 0
+        val spare = periodNanos - cost * LATCH_COST_PERCENT / PERCENT - frameMarginNanos
+        return spare.coerceIn(0, LATCH_MAX_NANOS)
+    }
+
+    /** GL thread, after a frame: what it cost, and whether it was drawn in time for the refresh it aimed at. */
+    private fun measureFrame(startedNanos: Long) {
+        val now = System.nanoTime()
+        val cost = now - startedNanos
+        // Up at once, down slowly: one heavy frame is enough to leave it room.
+        frameCostNanos = if (cost > frameCostNanos) cost else (frameCostNanos * LATCH_KEEP_PERCENT + cost * (PERCENT - LATCH_KEEP_PERCENT)) / PERCENT
+        val late = frameDeadlineNanos > 0 && now > frameDeadlineNanos - LATCH_PRESENT_NANOS
+        frameMarginNanos = if (late) (frameMarginNanos + LATCH_MARGIN_STEP_NANOS).coerceAtMost(LATCH_MARGIN_MAX_NANOS)
+            else (frameMarginNanos - LATCH_MARGIN_STEP_NANOS / LATCH_RECOVER_FRAMES).coerceAtLeast(LATCH_MARGIN_NANOS)
+    }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
     fun onCreate(lifecycleOwner: LifecycleOwner) = catchExceptions {
@@ -750,9 +791,11 @@ class GLRetroView(
                         onLinkEnded?.invoke(reason)
                     }
                 }
+                val started = System.nanoTime()
                 LibretroDroid.step(this@GLRetroView)
                 streamFrame()
                 streamSurfaceFrame()
+                measureFrame(started)
                 LibretroDroid.achievementsEvents()?.let { achievementEventsSubject.tryEmit(it.decodeToString()) }
                 lifecycle?.coroutineScope?.launch {
                     retroGLEventsSubject.emit(GLRetroEvents.FrameRendered)
@@ -947,6 +990,22 @@ class GLRetroView(
     companion object {
         private val TAG_LOG = GLRetroView::class.java.simpleName
         private const val STREAM_STOP_MS = 500L
+
+        private const val NANOS_PER_MILLI = 1_000_000L
+        private const val PERCENT = 100
+        /** A frame may take this much of what it took lately and still be on time. */
+        private const val LATCH_COST_PERCENT = 150
+        private const val LATCH_KEEP_PERCENT = 95
+        /** Handing the frame to the screen is not in the measured cost: it and the compositor need this long. */
+        private const val LATCH_PRESENT_NANOS = 4_000_000L
+        private const val LATCH_MARGIN_NANOS = 6_000_000L
+        private const val LATCH_MARGIN_STEP_NANOS = 2_000_000L
+        private const val LATCH_MARGIN_MAX_NANOS = 16_000_000L
+        /** A late frame's extra margin is given back over this many frames on time. */
+        private const val LATCH_RECOVER_FRAMES = 600
+        private const val LATCH_MAX_NANOS = 8_000_000L
+        /** Screens of 50 to 65 Hz: the ones whose refresh paces a game. */
+        private val LATCH_PERIOD_NANOS = 15_300_000L..20_100_000L
 
         const val MOTION_SOURCE_DPAD = LibretroDroid.MOTION_SOURCE_DPAD
         const val MOTION_SOURCE_ANALOG_LEFT = LibretroDroid.MOTION_SOURCE_ANALOG_LEFT
