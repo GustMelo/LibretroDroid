@@ -298,7 +298,7 @@ public:
     void stopNetplay();
     std::string coreVersion();
     void redraw();
-    void renderTo(unsigned framebuffer, unsigned width, unsigned height);
+    void renderTo(unsigned framebuffer, unsigned width, unsigned height, bool topRowFirst = true);
     bool setMultitap(bool enabled);
 private:
     void applyMultitapLocked(bool enabled);

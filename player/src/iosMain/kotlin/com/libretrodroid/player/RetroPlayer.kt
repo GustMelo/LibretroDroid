@@ -47,6 +47,7 @@ import com.libretrodroid.engine.native.re_set_motion
 import com.libretrodroid.engine.native.re_set_multitap
 import com.libretrodroid.engine.native.re_stream_frame
 import com.libretrodroid.engine.native.re_stream_stop
+import com.libretrodroid.engine.native.re_stream_surface
 import com.libretrodroid.engine.native.re_surface_changed
 import com.libretrodroid.engine.native.re_surface_created
 import com.libretrodroid.engine.native.re_unserialize
@@ -135,9 +136,11 @@ import platform.Foundation.currentLocale
 import platform.Foundation.dateWithTimeIntervalSinceNow
 import platform.Foundation.languageCode
 import platform.Foundation.runMode
+import platform.QuartzCore.CACurrentMediaTime
 import platform.QuartzCore.CADisplayLink
 import platform.QuartzCore.CAFrameRateRangeMake
 import platform.UIKit.UIColor
+import platform.UIKit.UIScreen
 import platform.UIKit.UIView
 import platform.darwin.DISPATCH_TIME_FOREVER
 import platform.darwin.NSObject
@@ -147,6 +150,7 @@ import platform.darwin.dispatch_semaphore_create
 import platform.darwin.dispatch_semaphore_signal
 import platform.darwin.dispatch_semaphore_wait
 import platform.posix.size_tVar
+import platform.posix.usleep
 import kotlin.concurrent.Volatile
 import kotlinx.cinterop.ObjCAction
 
@@ -212,6 +216,13 @@ class RetroFrame(val pixels: NSData, val width: Int, val height: Int)
  * [audio]: 48 kHz interleaved 16-bit stereo, on the audio thread. The data is only valid during the call.
  */
 interface RetroStreamSink {
+    /**
+     * The frame just rendered as a BGRA `CVPixelBuffer` on an IOSurface, which a hardware encoder takes as it is:
+     * nothing was copied or converted. On the render thread; retain it to keep it past the call. A device that
+     * cannot render this way calls the other [video] instead.
+     */
+    fun video(pixelBuffer: COpaquePointer)
+
     fun video(pixels: NSData, width: Int, height: Int)
     fun audio(samples: NSData, frames: Int)
 }
@@ -369,8 +380,18 @@ class RetroPlayer(
      */
     fun setSpeed(speed: Float) {
         if (isLinkActive && speed != 1f) return
+        this.speed = speed
         re_set_speed(speed)
     }
+
+    @Volatile private var speed = 1f
+    @Volatile private var rewinding = false
+
+    /**
+     * Reads the pads as late in each refresh as the frame still reaches the screen on time, instead of at its
+     * start: up to about 10 ms less between a press and its picture on light systems. On by default.
+     */
+    @Volatile var lateInput = true
 
     /** Frames the core ran per displayed frame lately (what fast-forward reached); negative while rewinding. */
     val effectiveSpeed: Float get() = re_effective_speed()
@@ -391,7 +412,10 @@ class RetroPlayer(
     fun setRewind(budgetBytes: Long) = re_set_rewind(budgetBytes.coerceAtLeast(0).toULong())
 
     /** While true each displayed frame steps back through the recorded play instead of advancing. */
-    fun setRewinding(rewinding: Boolean) = re_set_rewinding(rewinding)
+    fun setRewinding(rewinding: Boolean) {
+        this.rewinding = rewinding
+        re_set_rewinding(rewinding)
+    }
 
     val rewindSeconds: Float get() = re_rewind_seconds()
 
@@ -585,25 +609,42 @@ class RetroPlayer(
         onRenderThread { re_set_variable(key, if (enabled && jitAvailable) "enabled" else "disabled") }
     }
 
+    /** The link ticking the game, replaced when the picture moves to another screen. Render thread only. */
+    private var link: CADisplayLink? = null
+
+    /**
+     * Ticks with [screen]'s refresh, or the phone's when null. A TV (AirPlay or cable) refreshes on a clock of its
+     * own: frames paced by the phone's reached it at a drifting moment of its refresh, each waiting up to a whole
+     * one, and now and then one was shown twice or not at all.
+     */
+    private fun follow(ticker: Ticker, screen: UIScreen?) {
+        link?.invalidate()
+        val selector = NSSelectorFromString("tick:")
+        link = (screen?.displayLinkWithTarget(ticker, selector) ?: CADisplayLink.displayLinkWithTarget(ticker, selector)).apply {
+            preferredFrameRateRange = CAFrameRateRangeMake(60f, 60f, 60f)
+            addToRunLoop(NSRunLoop.currentRunLoop, NSRunLoopCommonModes)
+        }
+    }
+
     private fun renderThread(layer: kotlinx.cinterop.CPointer<kotlinx.cinterop.CPointed>?) {
         val self = StableRef.create(this)
-        val ticker = Ticker { frame(self.asCPointer()) }
-        var link: CADisplayLink? = null
+        lateinit var ticker: Ticker
+        ticker = Ticker { tick ->
+            (view as GameView).takeScreen()?.let { follow(ticker, it) }
+            frame(self.asCPointer(), tick)
+        }
         try {
             if (!open(layer)) {
                 fail(re_last_error()?.toKString() ?: "failed to open the game")
                 return
             }
-            link = CADisplayLink.displayLinkWithTarget(ticker, NSSelectorFromString("tick:")).apply {
-
-                preferredFrameRateRange = CAFrameRateRangeMake(60f, 60f, 60f)
-                addToRunLoop(NSRunLoop.currentRunLoop, NSRunLoopCommonModes)
-            }
+            follow(ticker, (view as GameView).takeScreen())
             while (running) {
                 NSRunLoop.currentRunLoop.runMode(NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow(0.1))
             }
         } finally {
             link?.invalidate()
+            link = null
             runPendingTasks()
             stopLinkOnRenderThread()
             stopStreamOnRenderThread()
@@ -642,7 +683,33 @@ class RetroPlayer(
         true
     }
 
-    private fun frame(self: COpaquePointer) {
+    /** How long a frame takes from reading the pads to handing the picture over, lately; seconds. */
+    private var frameCost = 0.0
+    /** Kept free before the refresh on top of [frameCost]; grows with every frame that came out late. */
+    private var frameMargin = LATCH_MARGIN
+
+    /**
+     * Waits inside the refresh interval so the pads are read as late as the frame still makes it to the screen
+     * (RetroArch's automatic frame delay). A game that takes 3 ms to run was reading them 16 ms before its picture
+     * showed; read 8 ms later, a press reaches the same picture it used to miss. Only at normal speed.
+     */
+    private fun waitForLateInput(tick: CADisplayLink) {
+        if (!lateInput || speed != 1f || rewinding || linkSession != null || frameCost <= 0.0) return
+        val spare = tick.targetTimestamp - CACurrentMediaTime() - frameCost * LATCH_COST_FACTOR - frameMargin
+        if (spare > LATCH_MIN) usleep((minOf(spare, LATCH_MAX) * MICROS).toUInt())
+    }
+
+    /** After a frame: what it cost, and whether it was ready in time for the refresh it aimed at. */
+    private fun measureFrame(tick: CADisplayLink, started: Double) {
+        val now = CACurrentMediaTime()
+        val cost = now - started
+        // Up at once, down slowly: one heavy frame is enough to leave it room.
+        frameCost = if (cost > frameCost) cost else frameCost * LATCH_DECAY + cost * (1 - LATCH_DECAY)
+        frameMargin = if (now > tick.targetTimestamp - LATCH_PRESENT) minOf(frameMargin + LATCH_MARGIN_STEP, LATCH_MARGIN_MAX)
+            else maxOf(frameMargin - LATCH_MARGIN_STEP / LATCH_RECOVER_FRAMES, LATCH_MARGIN)
+    }
+
+    private fun frame(self: COpaquePointer, tick: CADisplayLink) {
         runPendingTasks()
         (view as GameView).takeResize()?.let { (w, h) ->
             re_surface_changed(w, h)
@@ -650,6 +717,8 @@ class RetroPlayer(
             if (paused) re_redraw()
         }
         if (paused) return
+        waitForLateInput(tick)
+        val started = CACurrentMediaTime()
         val local = gamepads.buttons or touchButtons.value
         val sharing = localPlayers > 1
         for (port in 0 until PORTS) {
@@ -680,9 +749,10 @@ class RetroPlayer(
         if (sink != null) streamSize.let { (w, h) ->
             // FILL means the frame's shape here, not the phone's: the TV would get a narrow portrait picture.
             if (aspectRatio == AspectRatio.FILL) re_set_aspect_ratio_override(overrideFor(w, h))
-            re_stream_frame(w, h, streamVideo, self)
+            if (!re_stream_surface(w, h, streamSurface, self)) re_stream_frame(w, h, streamVideo, self)
             if (aspectRatio == AspectRatio.FILL) applyAspectRatio()
         }
+        measureFrame(tick, started)
         if (!ready) {
             ready = true
             dispatch_async(dispatch_get_main_queue()) { onReady?.invoke() }
@@ -752,6 +822,21 @@ class RetroPlayer(
         const val SOURCE_LEFT = 1
         const val SOURCE_RIGHT = 2
 
+        const val MICROS = 1_000_000
+        /** A frame may take this much longer than lately and still be on time. */
+        const val LATCH_COST_FACTOR = 1.5
+        const val LATCH_DECAY = 0.95
+        /** The compositor wants a picture this long before the refresh that shows it. */
+        const val LATCH_PRESENT = 0.004
+        const val LATCH_MARGIN = 0.006
+        const val LATCH_MARGIN_STEP = 0.002
+        const val LATCH_MARGIN_MAX = 0.016
+        /** A late frame's extra margin is given back over this many frames on time. */
+        const val LATCH_RECOVER_FRAMES = 600
+        /** Shorter waits are not worth a sleep, and no wait is longer than this. */
+        const val LATCH_MIN = 0.001
+        const val LATCH_MAX = 0.010
+
         fun pack(lx: Int, ly: Int, rx: Int, ry: Int): Long =
             listOf(lx, ly, rx, ry).fold(0L) { packed, value -> (packed shl 16) or (value.toLong() and 0xffff) }
 
@@ -760,6 +845,11 @@ class RetroPlayer(
         val streamVideo = staticCFunction { context: COpaquePointer?, rgba: kotlinx.cinterop.CPointer<UByteVar>?, width: Int, height: Int ->
             val sink = context!!.asStableRef<RetroPlayer>().get().sink ?: return@staticCFunction
             sink.video(NSData.dataWithBytesNoCopy(rgba, (width * height * 4).convert(), false), width, height)
+        }
+
+        val streamSurface = staticCFunction { context: COpaquePointer?, pixelBuffer: COpaquePointer? ->
+            val sink = context!!.asStableRef<RetroPlayer>().get().sink ?: return@staticCFunction
+            pixelBuffer?.let(sink::video)
         }
 
         val streamAudio = staticCFunction { context: COpaquePointer?, samples: kotlinx.cinterop.CPointer<kotlinx.cinterop.ShortVar>?, count: ULong ->
@@ -784,13 +874,15 @@ class RetroPlayer(
     }
 }
 
-private class Ticker(private val onTick: () -> Unit) : NSObject() {
+private class Ticker(private val onTick: (CADisplayLink) -> Unit) : NSObject() {
     @ObjCAction
-    fun tick(link: CADisplayLink) = onTick()
+    fun tick(link: CADisplayLink) = onTick(link)
 }
 
 private class GameView : UIView(frame = CGRectZero.readValue()) {
     private val pendingResize = atomic<Pair<Int, Int>?>(null)
+    /** The screen this view moved to and the render thread has not followed yet. */
+    private val pendingScreen = atomic<UIScreen?>(null)
     @Volatile var pixelSize: Pair<Int, Int> = 1 to 1
         private set
 
@@ -813,6 +905,7 @@ private class GameView : UIView(frame = CGRectZero.readValue()) {
         super.didMoveToWindow()
         val scale = traitCollection.displayScale
         if (window != null && scale > 0.0 && scale != contentScaleFactor) contentScaleFactor = scale
+        window?.windowScene?.screen?.let { pendingScreen.value = it }
         measure()
     }
 
@@ -826,6 +919,8 @@ private class GameView : UIView(frame = CGRectZero.readValue()) {
     }
 
     fun takeResize(): Pair<Int, Int>? = pendingResize.getAndSet(null)
+
+    fun takeScreen(): UIScreen? = pendingScreen.getAndSet(null)
 }
 
 private inline fun takeBytes(read: (kotlinx.cinterop.CPointer<size_tVar>) -> kotlinx.cinterop.CPointer<UByteVar>?): ByteArray? = memScoped {

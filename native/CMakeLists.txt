@@ -89,6 +89,7 @@ elseif(APPLE)
             src/apple/audio_coreaudio.cpp
             src/apple/log_apple.cpp
             src/apple/microphone_unavailable.cpp
+            src/apple/streamsurface.cpp
             bindings/c/retroengine.cpp
     )
     set(RE_TARGET retroengine)

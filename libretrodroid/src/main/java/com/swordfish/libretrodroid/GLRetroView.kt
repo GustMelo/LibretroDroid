@@ -508,6 +508,51 @@ class GLRetroView(
      */
     fun readStreamAudio(buffer: ByteBuffer, frames: Int): Int = LibretroDroid.readStreamAudio(buffer, frames)
 
+    private class StreamTarget(val surface: android.view.Surface, val width: Int, val height: Int)
+
+    /** Where the app wants the stream drawn, and what the GL thread is drawing into. */
+    @Volatile private var streamTarget: StreamTarget? = null
+    private var streamTargetStarted: StreamTarget? = null
+
+    /**
+     * Draws every frame once more straight into [surface] at [width] x [height] (letterboxed) until
+     * [stopStreamSurface]: a video encoder's input, or the texture it reads. Nothing is read back to memory and no
+     * display stands in between, so each frame reaches the encoder as soon as it is rendered. The picture only:
+     * the sound goes through [startStreamAudio]. The screen keeps playing. May be called before the view is shown:
+     * it starts with the first frame.
+     */
+    fun startStreamSurface(surface: android.view.Surface, width: Int, height: Int) {
+        streamTarget = StreamTarget(surface, width, height)
+    }
+
+    /** Ends [startStreamSurface]. The surface may be released once this returns. */
+    fun stopStreamSurface() {
+        if (streamTarget == null) return
+        streamTarget = null
+        val done = java.util.concurrent.CountDownLatch(1)
+        queueEvent {
+            streamTargetStarted = null
+            LibretroDroid.streamSurfaceStop()
+            done.countDown()
+        }
+        // A view whose GL thread is gone never runs it: the engine then lets go when its next frame fails.
+        done.await(STREAM_STOP_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    /** GL thread, with the context current: follows [streamTarget], then draws the frame into it. */
+    private fun streamSurfaceFrame() {
+        val wanted = streamTarget
+        if (wanted !== streamTargetStarted) {
+            LibretroDroid.streamSurfaceStop()
+            streamTargetStarted = wanted?.takeIf { LibretroDroid.streamSurfaceStart(it.surface, it.width, it.height) }
+        }
+        // A surface that cannot be drawn into is given up, not retried sixty times a second.
+        if (wanted != null && (streamTargetStarted == null || !LibretroDroid.streamSurfaceFrame())) {
+            streamTargetStarted = null
+            if (streamTarget === wanted) streamTarget = null
+        }
+    }
+
     private fun stopStreamOnRenderThread() {
         streamSink = null
         streamBuffer = null
@@ -659,6 +704,7 @@ class GLRetroView(
                 }
                 LibretroDroid.step(this@GLRetroView)
                 streamFrame()
+                streamSurfaceFrame()
                 LibretroDroid.achievementsEvents()?.let { achievementEventsSubject.tryEmit(it.decodeToString()) }
                 lifecycle?.coroutineScope?.launch {
                     retroGLEventsSubject.emit(GLRetroEvents.FrameRendered)
@@ -852,6 +898,7 @@ class GLRetroView(
 
     companion object {
         private val TAG_LOG = GLRetroView::class.java.simpleName
+        private const val STREAM_STOP_MS = 500L
 
         const val MOTION_SOURCE_DPAD = LibretroDroid.MOTION_SOURCE_DPAD
         const val MOTION_SOURCE_ANALOG_LEFT = LibretroDroid.MOTION_SOURCE_ANALOG_LEFT

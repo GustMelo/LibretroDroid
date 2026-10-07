@@ -21,6 +21,7 @@
 #include "utils/rect.h"
 #include "audio_tap.h"
 #include "streamcapture.h"
+#include "apple/streamsurface.h"
 #include "videoobservation.h"
 #include "achievements.h"
 
@@ -33,11 +34,13 @@ struct Egl {
     EGLDisplay display = EGL_NO_DISPLAY;
     EGLContext context = EGL_NO_CONTEXT;
     EGLSurface surface = EGL_NO_SURFACE;
+    EGLConfig config = nullptr;
 } egl;
 
 std::array<uint16_t, 4> buttons {};
 
 StreamCapture stream;
+StreamSurface streamSurface;
 
 template <typename F>
 bool guarded(const char *what, F &&body) {
@@ -86,6 +89,7 @@ bool re_attach_layer(void *layer) {
         lastError = "EGL: no RGBA8/ES3 config";
         return false;
     }
+    egl.config = config;
     egl.surface = eglCreateWindowSurface(egl.display, config, reinterpret_cast<EGLNativeWindowType>(layer), nullptr);
     const EGLint contextAttributes[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
     egl.context = eglCreateContext(egl.display, config, EGL_NO_CONTEXT, contextAttributes);
@@ -100,6 +104,7 @@ bool re_attach_layer(void *layer) {
 
 void re_detach_layer(void) {
     if (egl.display == EGL_NO_DISPLAY) return;
+    streamSurface.release(egl.display);
     eglMakeCurrent(egl.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     if (egl.context != EGL_NO_CONTEXT) eglDestroyContext(egl.display, egl.context);
     if (egl.surface != EGL_NO_SURFACE) eglDestroySurface(egl.display, egl.surface);
@@ -374,7 +379,19 @@ void re_stream_frame(int width, int height, re_video_fn video, void *context) {
     });
 }
 
-void re_stream_stop(void) { stream.release(); }
+bool re_stream_surface(int width, int height, re_surface_fn video, void *context) {
+    if (!video || egl.display == EGL_NO_DISPLAY) return false;
+    bool captured = false;
+    guarded("stream", [&] {
+        captured = streamSurface.capture(egl.display, egl.config, width, height, [&](CVPixelBufferRef buffer) { video(context, buffer); });
+    });
+    return captured;
+}
+
+void re_stream_stop(void) {
+    stream.release();
+    if (egl.display != EGL_NO_DISPLAY) streamSurface.release(egl.display);
+}
 
 void re_set_audio_tap(re_audio_fn audio, void *context) {
     setAudioTap(audio, context);

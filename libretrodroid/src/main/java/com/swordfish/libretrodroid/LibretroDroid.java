@@ -111,6 +111,12 @@ public class LibretroDroid {
     public static native boolean streamFrame(int width, int height, java.nio.ByteBuffer buffer);
     /** GL thread: frees what streamFrame allocated. */
     public static native void streamStop();
+    /** GL thread: from now on streamSurfaceFrame draws into surface (width x height). False when it cannot. */
+    public static native boolean streamSurfaceStart(android.view.Surface surface, int width, int height);
+    /** GL thread, after step: draws the frame just rendered into the stream's surface. False once that surface is gone. */
+    public static native boolean streamSurfaceFrame();
+    /** GL thread: lets go of the stream's surface. */
+    public static native void streamSurfaceStop();
     /** Taps the audio as played, for readStreamAudio. */
     public static native void setStreamAudio(boolean enabled);
     /** While the audio is tapped: true plays silence here, so the sound is heard only where it streams to. */

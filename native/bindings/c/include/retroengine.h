@@ -121,6 +121,15 @@ bool re_set_multitap(bool enabled);
  */
 typedef void (*re_video_fn)(void *context, const uint8_t *rgba, int width, int height);
 void re_stream_frame(int width, int height, re_video_fn video, void *context);
+/*
+ * Streaming without leaving the GPU. After re_frame, on the render thread: renders the frame into a
+ * width x height BGRA pixel buffer backed by an IOSurface, the hardware encoder's own input, and hands over that
+ * frame (not the previous one) once the GPU finished it. pixel_buffer is a CVPixelBufferRef, valid during the
+ * callback: retain it to keep it, and it is drawn over again only after every other owner released it. No frame is
+ * handed over while the encoder holds them all. Returns false when the display cannot do it: use re_stream_frame.
+ */
+typedef void (*re_surface_fn)(void *context, void *pixel_buffer);
+bool re_stream_surface(int width, int height, re_surface_fn video, void *context);
 void re_stream_stop(void);
 /* Game audio as played: 48 kHz interleaved stereo, called on the audio thread. NULL removes it. */
 typedef void (*re_audio_fn)(void *context, const int16_t *frames, size_t count);

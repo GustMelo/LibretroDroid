@@ -84,7 +84,7 @@ public:
 
     // Renders the current frame again into [framebuffer], letterboxed in width x height,
     // with the same shader chain. The on-screen layout is left untouched.
-    void renderTo(unsigned framebuffer, unsigned width, unsigned height);
+    void renderTo(unsigned framebuffer, unsigned width, unsigned height, bool topRowFirst = true);
 
     uintptr_t getCurrentFramebuffer() {
         return renderer->getFramebuffer();

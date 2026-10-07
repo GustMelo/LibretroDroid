@@ -19,6 +19,7 @@
 #include <jni.h>
 
 #include <EGL/egl.h>
+#include <android/native_window_jni.h>
 
 #include <memory>
 #include <string>
@@ -773,6 +774,90 @@ JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_stream
 
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_streamStop(JNIEnv* env, jclass obj) {
     streamCapture.release();
+}
+
+/*
+ * Streaming without leaving the GPU: the frame is drawn once more straight into a window surface someone else
+ * consumes (a video encoder's input, or the texture it reads), on the view's own GL context. Nothing is read back
+ * and no compositor stands in between, so the frame handed over is the one just rendered.
+ */
+namespace {
+struct StreamWindow {
+    EGLDisplay display = EGL_NO_DISPLAY;
+    EGLSurface surface = EGL_NO_SURFACE;
+    ANativeWindow *window = nullptr;
+    int width = 0;
+    int height = 0;
+
+    void release() {
+        if (surface != EGL_NO_SURFACE) eglDestroySurface(display, surface);
+        if (window) ANativeWindow_release(window);
+        *this = StreamWindow {};
+    }
+} streamWindow;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_streamSurfaceStart(
+    JNIEnv* env,
+    jclass obj,
+    jobject surface,
+    jint width,
+    jint height
+) {
+    streamWindow.release();
+    EGLDisplay display = eglGetCurrentDisplay();
+    EGLContext context = eglGetCurrentContext();
+    if (display == EGL_NO_DISPLAY || context == EGL_NO_CONTEXT || !surface || width <= 0 || height <= 0) return false;
+    // The view's own config: a surface of any other could not be drawn with this context.
+    EGLint configId = 0;
+    EGLConfig config = nullptr;
+    EGLint count = 0;
+    eglQueryContext(display, context, EGL_CONFIG_ID, &configId);
+    const EGLint attributes[] = { EGL_CONFIG_ID, configId, EGL_NONE };
+    if (!eglChooseConfig(display, attributes, &config, 1, &count) || count == 0) return false;
+    ANativeWindow *window = ANativeWindow_fromSurface(env, surface);
+    if (!window) return false;
+    EGLSurface target = eglCreateWindowSurface(display, config, window, nullptr);
+    if (target == EGL_NO_SURFACE) {
+        LOGE("stream: no window surface (EGL 0x%x)", eglGetError());
+        ANativeWindow_release(window);
+        return false;
+    }
+    streamWindow.display = display;
+    streamWindow.surface = target;
+    streamWindow.window = window;
+    streamWindow.width = width;
+    streamWindow.height = height;
+    // Never wait for whoever consumes it: the game's own pace is the stream's.
+    EGLSurface draw = eglGetCurrentSurface(EGL_DRAW);
+    EGLSurface read = eglGetCurrentSurface(EGL_READ);
+    if (eglMakeCurrent(display, target, target, context)) eglSwapInterval(display, 0);
+    eglMakeCurrent(display, draw, read, context);
+    return true;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_streamSurfaceFrame(JNIEnv* env, jclass obj) {
+    if (streamWindow.surface == EGL_NO_SURFACE) return false;
+    EGLContext context = eglGetCurrentContext();
+    EGLSurface draw = eglGetCurrentSurface(EGL_DRAW);
+    EGLSurface read = eglGetCurrentSurface(EGL_READ);
+    bool shown = false;
+    if (eglMakeCurrent(streamWindow.display, streamWindow.surface, streamWindow.surface, context)) {
+        try {
+            LibretroDroid::getInstance().renderTo(0, streamWindow.width, streamWindow.height, false);
+            shown = eglSwapBuffers(streamWindow.display, streamWindow.surface) == EGL_TRUE;
+        } catch (std::exception &exception) {
+            LOGE("Error in streamSurfaceFrame: %s", exception.what());
+        }
+    }
+    eglMakeCurrent(streamWindow.display, draw, read, context);
+    // A surface that went away under it (its owner closed first) is let go of.
+    if (!shown) streamWindow.release();
+    return shown;
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_streamSurfaceStop(JNIEnv* env, jclass obj) {
+    streamWindow.release();
 }
 
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setStreamAudio(

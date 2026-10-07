@@ -212,13 +212,14 @@ void Video::renderFrame() {
     }
 }
 
-void Video::renderTo(unsigned framebuffer, unsigned width, unsigned height) {
+void Video::renderTo(unsigned framebuffer, unsigned width, unsigned height, bool topRowFirst) {
     VideoLayout screen = videoLayout;
     bool dirty = isDirty;
     videoLayout.updateScreenSize(width, height);
     videoLayout.updateViewportSize(Rect(0.0F, 0.0F, 1.0F, 1.0F));
-    // glReadPixels returns the bottom row first: render upside down so readers get the top row first.
-    videoLayout.flipVertically();
+    // Memory holds a framebuffer's bottom row first: render upside down so whoever reads it gets the top row first.
+    // A window surface is shown the right way up as it is.
+    if (topRowFirst) videoLayout.flipVertically();
     targetFramebuffer = framebuffer;
     isDirty = true;
     renderFrame();

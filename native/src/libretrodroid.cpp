@@ -1004,9 +1004,9 @@ void LibretroDroid::redraw() {
     video->renderFrame();
 }
 
-void LibretroDroid::renderTo(unsigned framebuffer, unsigned width, unsigned height) {
+void LibretroDroid::renderTo(unsigned framebuffer, unsigned width, unsigned height, bool topRowFirst) {
     std::lock_guard<std::mutex> lock(coreLock);
-    if (video) video->renderTo(framebuffer, width, height);
+    if (video) video->renderTo(framebuffer, width, height, topRowFirst);
 }
 
 bool LibretroDroid::setMultitap(bool enabled) {
