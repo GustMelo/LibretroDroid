@@ -36,6 +36,7 @@
 #include "video.h"
 #include "renderers/renderer.h"
 #include "fpssync.h"
+#include "originalframe.h"
 #include "input.h"
 #include "rumble.h"
 #include "shadermanager.h"
@@ -107,6 +108,11 @@ public:
     );
     void resume();
     void step();
+    /** A stream hands its picture over before the clock wait; local-only rendering keeps its existing timing. */
+    void setStreamTiming(bool enabled) { streamTiming = enabled; }
+    bool usesStreamTiming() const { return streamTiming; }
+    void finishStreamFrame();
+    OriginalFrame originalFrame;
     void pause();
     void destroy();
 
@@ -256,6 +262,7 @@ private:
     float audioVolume = 1.0f;
     bool vsync = true;
     bool frameSkip = true;
+    bool streamTiming = false;
     bool rumbleEnabled = false;
 
     ShaderManager::Config fragmentShaderConfig = ShaderManager::Config {

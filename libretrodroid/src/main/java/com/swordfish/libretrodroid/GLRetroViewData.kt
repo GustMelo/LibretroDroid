@@ -35,6 +35,12 @@ class GLRetroViewData(context: Context) {
     var skipDuplicateFrames: Boolean = false
     var enableMicrophone: Boolean = false
     var immersiveMode: ImmersiveMode? = null
+
+    /**
+     * Lets the core draw with Vulkan where the device can, for a core that needs it (a PlayStation 2). Its
+     * frames still reach the screen through the view's OpenGL ES pipeline. Left off, cores get OpenGL ES 3.
+     */
+    var preferVulkan: Boolean = false
 }
 
 enum class ViewportAlignment(val value: Int) {

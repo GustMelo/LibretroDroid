@@ -650,6 +650,14 @@ JNIEXPORT jstring JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_coreVer
     return env->NewStringUTF(LibretroDroid::getInstance().coreVersion().c_str());
 }
 
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setPreferVulkan(
+    JNIEnv* env,
+    jclass obj,
+    jboolean enabled
+) {
+    Environment::getInstance().setPreferVulkan(enabled);
+}
+
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setRumbleEnabled(
     JNIEnv* env,
     jclass obj,
@@ -774,6 +782,31 @@ JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_stream
 
 JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_streamStop(JNIEnv* env, jclass obj) {
     streamCapture.release();
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setStreamTiming(JNIEnv*, jclass, jboolean enabled) {
+    LibretroDroid::getInstance().setStreamTiming(enabled);
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_finishStreamFrame(JNIEnv*, jclass) {
+    LibretroDroid::getInstance().finishStreamFrame();
+}
+
+JNIEXPORT jboolean JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_canStreamOriginal(JNIEnv*, jclass) {
+    return LibretroDroid::getInstance().originalFrame.software.load();
+}
+JNIEXPORT jfloat JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_streamAspectRatio(JNIEnv*, jclass) {
+    return LibretroDroid::getInstance().getAspectRatio();
+}
+
+JNIEXPORT void JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_setOriginalStream(JNIEnv*, jclass, jboolean enabled) {
+    LibretroDroid::getInstance().originalFrame.setEnabled(enabled);
+}
+
+JNIEXPORT jobject JNICALL Java_com_swordfish_libretrodroid_LibretroDroid_originalFrame(JNIEnv* env, jclass) {
+    auto& frame = LibretroDroid::getInstance().originalFrame;
+    if (!frame.software || frame.bytes.empty()) return nullptr;
+    return env->NewDirectByteBuffer(frame.bytes.data(), static_cast<jlong>(frame.bytes.size()));
 }
 
 /*

@@ -29,6 +29,9 @@
 #include "renderers/es3/framebufferrenderer.h"
 #include "renderers/es3/imagerendereres3.h"
 #include "renderers/es2/imagerendereres2.h"
+#if defined(__ANDROID__)
+#include "renderers/vulkan/vulkanrenderer.h"
+#endif
 
 namespace libretrodroid {
 static void printGLString(const char *name, GLenum s) {
@@ -319,6 +322,16 @@ void Video::updateShaderType(ShaderManager::Config shaderConfig) {
 
 void Video::initializeRenderer(RenderingOptions renderingOptions) {
     auto shaders = ShaderManager::getShader(requestedShaderConfig);
+
+#if defined(__ANDROID__)
+    if (renderingOptions.vulkan) {
+        renderer = new VulkanRenderer();
+        renderer->setShaders(std::move(shaders));
+        renderer->setPixelFormat(renderingOptions.pixelFormat);
+        updateProgram();
+        return;
+    }
+#endif
 
     if (renderingOptions.hardwareAccelerated) {
         renderer = new FramebufferRenderer(

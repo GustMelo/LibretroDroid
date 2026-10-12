@@ -67,6 +67,8 @@ if(ANDROID)
             src/android/input_android.cpp
             src/android/microphone/microphone.cpp
             src/android/microphone/microphoneinterface.cpp
+            src/vulkan/vulkanhost.cpp
+            src/renderers/vulkan/vulkanrenderer.cpp
             bindings/jni/libretrodroidjni.cpp
             bindings/jni/netpacketjni.cpp
             bindings/jni/utils/javautils.cpp
@@ -79,7 +81,7 @@ if(ANDROID)
             bindings/jni
     )
     target_link_options(libretrodroid PRIVATE "-Wl,-z,max-page-size=16384")
-    target_link_libraries(libretrodroid android log EGL oboe GLESv3)
+    target_link_libraries(libretrodroid android log EGL oboe GLESv3 vulkan nativewindow)
 
 elseif(APPLE)
     set(ANGLE_INCLUDE_DIR "${RE_DIR}/../../.cache/angle/include" CACHE PATH "ANGLE headers (EGL/, GLES2/, GLES3/)")

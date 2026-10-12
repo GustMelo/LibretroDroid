@@ -300,6 +300,7 @@ class GLRetroView(
     @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
     fun onCreate(lifecycleOwner: LifecycleOwner) = catchExceptions {
         lifecycle = lifecycleOwner.lifecycle
+        LibretroDroid.setPreferVulkan(data.preferVulkan)
         LibretroDroid.create(
             openGLESVersion,
             data.coreFilePath,
@@ -324,6 +325,7 @@ class GLRetroView(
         linkSession?.closeNetwork()
         linkSession = null
         streamSink = null
+        originalStreamSink = null
         LibretroDroid.setStreamAudio(false)
         LibretroDroid.destroy()
         lifecycle = null
@@ -556,6 +558,29 @@ class GLRetroView(
     }
 
     @Volatile private var streamSink: StreamSink? = null
+    /** Software-core RGB565 rows, top first, at the console's dimensions. Copy during the call to keep the pixels. */
+    fun interface OriginalStreamSink {
+        fun onFrame(pixels: ByteBuffer, width: Int, height: Int)
+    }
+    @Volatile private var originalStreamSink: OriginalStreamSink? = null
+    fun interface StreamTimingSink { fun onFrame(stepNs: Long, captureNs: Long, paceNs: Long) }
+    @Volatile var streamTimingSink: StreamTimingSink? = null
+    fun canStreamOriginal(): Boolean = LibretroDroid.canStreamOriginal()
+    fun startOriginalStream(sink: OriginalStreamSink) = queueEvent {
+        originalStreamSink = sink
+        LibretroDroid.setOriginalStream(true)
+    }
+    fun stopOriginalStream() = queueEvent {
+        originalStreamSink = null
+        LibretroDroid.setOriginalStream(false)
+    }
+    private fun originalStreamFrame() {
+        val sink = originalStreamSink ?: return
+        val frame = LibretroDroid.originalFrame()?.order(java.nio.ByteOrder.LITTLE_ENDIAN) ?: return
+        val width = frame.short.toInt() and 0xffff
+        val height = frame.short.toInt() and 0xffff
+        sink.onFrame(frame.slice(), width, height)
+    }
     private var streamBuffer: ByteBuffer? = null
     private var streamWidth = 0
     private var streamHeight = 0
@@ -792,9 +817,16 @@ class GLRetroView(
                     }
                 }
                 val started = System.nanoTime()
+                LibretroDroid.setStreamTiming(streamSink != null || streamTarget != null || originalStreamSink != null)
                 LibretroDroid.step(this@GLRetroView)
+                val stepped = System.nanoTime()
                 streamFrame()
                 streamSurfaceFrame()
+                originalStreamFrame()
+                val captured = System.nanoTime()
+                // Hand ready pictures to the encoder/network before pacing the next emulation frame.
+                LibretroDroid.finishStreamFrame()
+                streamTimingSink?.onFrame(stepped - started, captured - stepped, System.nanoTime() - captured)
                 measureFrame(started)
                 LibretroDroid.achievementsEvents()?.let { achievementEventsSubject.tryEmit(it.decodeToString()) }
                 lifecycle?.coroutineScope?.launch {

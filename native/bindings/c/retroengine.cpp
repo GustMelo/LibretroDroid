@@ -171,7 +171,7 @@ void re_frame(re_outgoing_fn outgoing, void *context) {
     for (const auto &item : Netplay::getInstance().drainOutbox()) {
         outgoing(context, static_cast<int>(item.type), item.frame, item.value);
     }
-    eglSwapBuffers(egl.display, egl.surface);
+    if (!engine.usesStreamTiming()) eglSwapBuffers(egl.display, egl.surface);
 }
 
 void re_set_buttons(unsigned port, uint16_t mask) {
@@ -391,6 +391,19 @@ bool re_stream_surface(int width, int height, re_surface_fn video, void *context
 void re_stream_stop(void) {
     stream.release();
     if (egl.display != EGL_NO_DISPLAY) streamSurface.release(egl.display);
+}
+
+void re_set_stream_timing(bool enabled) { LibretroDroid::getInstance().setStreamTiming(enabled); }
+void re_finish_stream_frame(void) {
+    if (!LibretroDroid::getInstance().usesStreamTiming()) return;
+    eglSwapBuffers(egl.display, egl.surface);
+    LibretroDroid::getInstance().finishStreamFrame();
+}
+bool re_can_stream_original(void) { return LibretroDroid::getInstance().originalFrame.software.load(); }
+void re_set_original_stream(bool enabled) { LibretroDroid::getInstance().originalFrame.setEnabled(enabled); }
+void re_original_frame(re_video_fn video, void *context) {
+    const auto& frame = LibretroDroid::getInstance().originalFrame;
+    if (video && frame.software && !frame.bytes.empty()) video(context, frame.bytes.data() + 4, frame.width, frame.height);
 }
 
 void re_set_audio_tap(re_audio_fn audio, void *context) {

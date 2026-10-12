@@ -53,6 +53,9 @@
 #include "vfs/vfs.h"
 #include "achievements.h"
 #include "sensors.h"
+#if defined(__ANDROID__)
+#include "vulkan/vulkanhost.h"
+#endif
 
 namespace libretrodroid {
 
@@ -271,7 +274,8 @@ void LibretroDroid::onSurfaceCreated() {
         Environment::getInstance().isUseDepth(),
         Environment::getInstance().isUseStencil(),
         openglESVersion,
-        Environment::getInstance().getPixelFormat()
+        Environment::getInstance().getPixelFormat(),
+        Environment::getInstance().isUseVulkan()
     };
 
     auto newVideo = new Video(
@@ -287,6 +291,18 @@ void LibretroDroid::onSurfaceCreated() {
     );
 
     video = std::unique_ptr<Video>(newVideo);
+
+#if defined(__ANDROID__)
+    if (Environment::getInstance().isUseVulkan()) {
+        // A Vulkan device doesn't belong to the GL surface: it is created with the first one and kept when the
+        // surface comes back, so the core is only told about its context once.
+        VulkanHost& vulkan = VulkanHost::getInstance();
+        if (vulkan.hasDevice()) return;
+        if (!vulkan.createDevice(Environment::getInstance().getVulkanNegotiation())) {
+            throw LibretroDroidError("A Vulkan device could not be created for this Core", ERROR_GL_NOT_COMPATIBLE);
+        }
+    }
+#endif
 
     if (Environment::getInstance().getHwContextReset() != nullptr) {
         Environment::getInstance().getHwContextReset()();
@@ -494,6 +510,9 @@ void LibretroDroid::destroy() {
     std::lock_guard<std::mutex> lock(coreLock);
 
     LOGD("Performing libretrodroid destroy");
+    originalFrame.setEnabled(false);
+    originalFrame.software = false;
+    streamTiming = false;
 
     if (Environment::getInstance().getHwContextDestroy() != nullptr) {
         Environment::getInstance().getHwContextDestroy()();
@@ -506,6 +525,10 @@ void LibretroDroid::destroy() {
     rewindScratch.shrink_to_fit();
     core->retro_unload_game();
     core->retro_deinit();
+#if defined(__ANDROID__)
+    // After the core let go of everything it made on the device.
+    VulkanHost::getInstance().destroy();
+#endif
 
     video = nullptr;
     core = nullptr;
@@ -572,7 +595,7 @@ void LibretroDroid::step() {
         video->renderFrame();
     }
 
-    if (fpsSync) {
+    if (fpsSync && !streamTiming) {
         fpsSync->wait();
     }
 
@@ -927,6 +950,10 @@ void LibretroDroid::setShaderConfig(ShaderManager::Config shaderConfig) {
     }
 }
 
+void LibretroDroid::finishStreamFrame() {
+    if (streamTiming && fpsSync) fpsSync->wait();
+}
+
 void LibretroDroid::handleVideoRefresh(
     const void *data,
     unsigned int width,
@@ -934,6 +961,7 @@ void LibretroDroid::handleVideoRefresh(
     size_t pitch
 ) {
     if (netplayReplaying || skipVideoFrame) return;
+    originalFrame.capture(data, width, height, pitch, Environment::getInstance().getPixelFormat());
     if (video) {
         video->onNewFrame(data, width, height, pitch);
 

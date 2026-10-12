@@ -1,0 +1,15 @@
+diff --git a/src/common/error.cpp b/src/common/error.cpp
+index d4455e310..6375c8c61 100644
+--- a/src/common/error.cpp
++++ b/src/common/error.cpp
+@@ -30,7 +30,9 @@ std::string NativeErrorToString(int e) {
+     return ret;
+ #else
+     char err_str[255];
+-#if defined(__GLIBC__) && (_GNU_SOURCE || (_POSIX_C_SOURCE < 200112L && _XOPEN_SOURCE < 600))
++// Bionic hands out the GNU strerror_r too, from API 23 on, whenever _GNU_SOURCE is set.
++#if (defined(__GLIBC__) && (_GNU_SOURCE || (_POSIX_C_SOURCE < 200112L && _XOPEN_SOURCE < 600))) || \
++    (defined(__BIONIC__) && defined(_GNU_SOURCE) && __ANDROID_API__ >= 23)
+     // Thread safe (GNU-specific)
+     const char* str = strerror_r(e, err_str, sizeof(err_str));
+     return std::string(str);

@@ -117,6 +117,13 @@ public class LibretroDroid {
     public static native boolean streamSurfaceFrame();
     /** GL thread: lets go of the stream's surface. */
     public static native void streamSurfaceStop();
+    public static native void setStreamTiming(boolean enabled);
+    public static native void finishStreamFrame();
+    public static native boolean canStreamOriginal();
+    public static native float streamAspectRatio();
+    public static native void setOriginalStream(boolean enabled);
+    /** GL thread only; owned by the engine, valid until its next video callback. Header: LE uint16 width/height. */
+    public static native java.nio.ByteBuffer originalFrame();
     /** Taps the audio as played, for readStreamAudio. */
     public static native void setStreamAudio(boolean enabled);
     /** While the audio is tapped: true plays silence here, so the sound is heard only where it streams to. */
@@ -145,6 +152,9 @@ public class LibretroDroid {
     public static native void reset();
 
     public static native void setRumbleEnabled(boolean enabled);
+
+    /** Lets the core created next draw with Vulkan where the device can; call before create. */
+    public static native void setPreferVulkan(boolean enabled);
 
     /** 1 normal, 0.1..0.99 slow motion, above 1 fast-forward (up to 100x), 0 as fast as the device can. */
     public static native void setSpeed(float speed);

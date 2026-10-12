@@ -42,6 +42,8 @@ public:
         bool useStencil;
         int openglESVersion;
         int pixelFormat;
+        /** The core draws with Vulkan: its frames reach GL through a shared hardware buffer (VulkanRenderer). */
+        bool vulkan = false;
     };
 
     struct ShaderChainEntry {

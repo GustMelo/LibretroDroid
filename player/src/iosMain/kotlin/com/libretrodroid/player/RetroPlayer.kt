@@ -48,6 +48,12 @@ import com.libretrodroid.engine.native.re_set_multitap
 import com.libretrodroid.engine.native.re_stream_frame
 import com.libretrodroid.engine.native.re_stream_stop
 import com.libretrodroid.engine.native.re_stream_surface
+import com.libretrodroid.engine.native.re_set_stream_timing
+import com.libretrodroid.engine.native.re_finish_stream_frame
+import com.libretrodroid.engine.native.re_can_stream_original
+import com.libretrodroid.engine.native.re_set_original_stream
+import com.libretrodroid.engine.native.re_original_frame
+import com.libretrodroid.engine.native.re_aspect_ratio
 import com.libretrodroid.engine.native.re_surface_changed
 import com.libretrodroid.engine.native.re_surface_created
 import com.libretrodroid.engine.native.re_unserialize
@@ -224,6 +230,9 @@ interface RetroStreamSink {
     fun video(pixelBuffer: COpaquePointer)
 
     fun video(pixels: NSData, width: Int, height: Int)
+    /** Original-size, top-down, little-endian RGB565; only valid during this call. */
+    fun original(pixels: NSData, width: Int, height: Int, aspect: Float)
+    fun timing(stepNs: Long, captureNs: Long, paceNs: Long)
     fun audio(samples: NSData, frames: Int)
 }
 
@@ -251,6 +260,12 @@ class RetroPlayer(
     @Volatile private var localPort = 0
     @Volatile private var sink: RetroStreamSink? = null
     private var streamSize = 0 to 0
+    private var originalStream = false
+    fun canStreamOriginal(): Boolean = re_can_stream_original()
+    fun setOriginalStream(enabled: Boolean) = onRenderThread {
+        originalStream = enabled
+        re_set_original_stream(enabled)
+    }
     private var sinkRef: StableRef<RetroPlayer>? = null
     @Volatile private var running = false
     @Volatile private var paused = false
@@ -305,6 +320,7 @@ class RetroPlayer(
         stopStreamOnRenderThread()
         streamSize = width to height
         this.sink = sink
+        re_set_stream_timing(true)
         val ref = StableRef.create(this).also { sinkRef = it }
         re_set_audio_tap(streamAudio, ref.asCPointer())
         re_set_audio_tap_only(!playHere)
@@ -317,6 +333,9 @@ class RetroPlayer(
         sinkRef?.dispose()
         sinkRef = null
         sink = null
+        originalStream = false
+        re_set_original_stream(false)
+        re_set_stream_timing(false)
         re_stream_stop()
     }
 
@@ -694,7 +713,7 @@ class RetroPlayer(
      * showed; read 8 ms later, a press reaches the same picture it used to miss. Only at normal speed.
      */
     private fun waitForLateInput(tick: CADisplayLink) {
-        if (!lateInput || speed != 1f || rewinding || linkSession != null || frameCost <= 0.0) return
+        if (sink != null || !lateInput || speed != 1f || rewinding || linkSession != null || frameCost <= 0.0) return
         val spare = tick.targetTimestamp - CACurrentMediaTime() - frameCost * LATCH_COST_FACTOR - frameMargin
         if (spare > LATCH_MIN) usleep((minOf(spare, LATCH_MAX) * MICROS).toUInt())
     }
@@ -744,14 +763,20 @@ class RetroPlayer(
             }
         }
         re_frame(outgoing, self)
+        val stepped = CACurrentMediaTime()
         if (rumble != null) re_poll_rumble(rumbleCallback, self)
         achievementEvents?.let { sinkEvents -> takeString { re_ra_events() }?.let(sinkEvents::events) }
         if (sink != null) streamSize.let { (w, h) ->
             // FILL means the frame's shape here, not the phone's: the TV would get a narrow portrait picture.
             if (aspectRatio == AspectRatio.FILL) re_set_aspect_ratio_override(overrideFor(w, h))
-            if (!re_stream_surface(w, h, streamSurface, self)) re_stream_frame(w, h, streamVideo, self)
+            if (originalStream) re_original_frame(streamOriginal, self)
+            else if (!re_stream_surface(w, h, streamSurface, self)) re_stream_frame(w, h, streamVideo, self)
             if (aspectRatio == AspectRatio.FILL) applyAspectRatio()
         }
+        val captured = CACurrentMediaTime()
+        re_finish_stream_frame()
+        sink?.timing(((stepped - started) * 1_000_000_000).toLong(), ((captured - stepped) * 1_000_000_000).toLong(),
+            ((CACurrentMediaTime() - captured) * 1_000_000_000).toLong())
         measureFrame(tick, started)
         if (!ready) {
             ready = true
@@ -845,6 +870,10 @@ class RetroPlayer(
         val streamVideo = staticCFunction { context: COpaquePointer?, rgba: kotlinx.cinterop.CPointer<UByteVar>?, width: Int, height: Int ->
             val sink = context!!.asStableRef<RetroPlayer>().get().sink ?: return@staticCFunction
             sink.video(NSData.dataWithBytesNoCopy(rgba, (width * height * 4).convert(), false), width, height)
+        }
+        val streamOriginal = staticCFunction { context: COpaquePointer?, pixels: kotlinx.cinterop.CPointer<UByteVar>?, width: Int, height: Int ->
+            val sink = context!!.asStableRef<RetroPlayer>().get().sink ?: return@staticCFunction
+            sink.original(NSData.dataWithBytesNoCopy(pixels, (width * height * 2).convert(), false), width, height, re_aspect_ratio())
         }
 
         val streamSurface = staticCFunction { context: COpaquePointer?, pixelBuffer: COpaquePointer? ->

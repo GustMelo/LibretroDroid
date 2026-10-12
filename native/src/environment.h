@@ -55,6 +55,13 @@ public:
     void setEnableVirtualFileSystem(bool value);
     void setEnableMicrophone(bool value);
 
+    /**
+     * Lets the next core draw with Vulkan where the device can (see VulkanHost): it is told Vulkan is preferred
+     * and a Vulkan context is granted. Off, every core is offered OpenGL ES 3 only. Kept across games; set it
+     * before each one is created.
+     */
+    void setPreferVulkan(bool value);
+
     void setReplaying(bool value);
 
     /** A fast-forward frame nobody sees or hears: the core may skip drawing and, with [audio] false, mixing. */
@@ -98,6 +105,12 @@ public:
 
     int getPixelFormat() const;
     bool isUseHwAcceleration() const;
+
+    /** The core draws with Vulkan: its frames come through VulkanHost, not through a GL framebuffer. */
+    bool isUseVulkan() const;
+
+    /** How the core wants the Vulkan device created, or null when it leaves that to the frontend. */
+    const struct retro_hw_render_context_negotiation_interface_vulkan* getVulkanNegotiation() const;
     bool isUseDepth() const;
     bool isUseStencil() const;
     bool isBottomLeftOrigin() const;
@@ -152,6 +165,9 @@ private:
 
     int pixelFormat = RETRO_PIXEL_FORMAT_RGB565;
     bool useHWAcceleration = false;
+    bool preferVulkan = false;
+    bool useVulkan = false;
+    const struct retro_hw_render_context_negotiation_interface_vulkan* vulkanNegotiation = nullptr;
     bool useDepth = false;
     bool useStencil = false;
     bool bottomLeftOrigin = false;

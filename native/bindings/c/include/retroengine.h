@@ -131,6 +131,12 @@ void re_stream_frame(int width, int height, re_video_fn video, void *context);
 typedef void (*re_surface_fn)(void *context, void *pixel_buffer);
 bool re_stream_surface(int width, int height, re_surface_fn video, void *context);
 void re_stream_stop(void);
+void re_set_stream_timing(bool enabled);
+void re_finish_stream_frame(void);
+bool re_can_stream_original(void);
+void re_set_original_stream(bool enabled);
+/** RGB565 little-endian rows, only valid during the callback. */
+void re_original_frame(re_video_fn video, void *context);
 /* Game audio as played: 48 kHz interleaved stereo, called on the audio thread. NULL removes it. */
 typedef void (*re_audio_fn)(void *context, const int16_t *frames, size_t count);
 void re_set_audio_tap(re_audio_fn audio, void *context);

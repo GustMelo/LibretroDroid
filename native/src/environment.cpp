@@ -33,6 +33,10 @@
 #include "microphone/microphoneinterface.h"
 #include "netplay.h"
 #include "sensors.h"
+#if defined(__ANDROID__)
+#include "libretro_vulkan.h"
+#include "vulkan/vulkanhost.h"
+#endif
 
 void Environment::initialize(
     const std::string &requiredSystemDirectory,
@@ -59,6 +63,8 @@ void Environment::deinitialize() {
 
     pixelFormat = RETRO_PIXEL_FORMAT_RGB565;
     useHWAcceleration = false;
+    useVulkan = false;
+    vulkanNegotiation = nullptr;
     useDepth = false;
     useStencil = false;
     bottomLeftOrigin = false;
@@ -161,7 +167,26 @@ bool Environment::environment_handle_set_controller_info(const struct retro_cont
 }
 
 bool Environment::environment_handle_set_hw_render(struct retro_hw_render_callback* hw_render_callback) {
+    if (hw_render_callback->context_type == RETRO_HW_CONTEXT_VULKAN) {
+#if defined(__ANDROID__)
+        // Refused unless the app asked for it: a core that also draws with OpenGL ES then falls back to that.
+        if (!preferVulkan || !libretrodroid::VulkanHost::getInstance().isSupported()) return false;
+        useHWAcceleration = true;
+        useVulkan = true;
+        useDepth = false;
+        useStencil = false;
+        // The image a Vulkan core hands over starts at its top row, whatever the callback's GL fields say.
+        bottomLeftOrigin = false;
+        hw_context_destroy = hw_render_callback->context_destroy;
+        hw_context_reset = hw_render_callback->context_reset;
+        return true;
+#else
+        return false;
+#endif
+    }
+
     useHWAcceleration = true;
+    useVulkan = false;
     useDepth = hw_render_callback->depth;
     useStencil = hw_render_callback->stencil;
     bottomLeftOrigin = hw_render_callback->bottom_left_origin;
@@ -275,8 +300,44 @@ bool Environment::handle_callback_environment(unsigned cmd, void *data) {
         case RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER: {
             LOGD("Called RETRO_ENVIRONMENT_GET_PREFERRED_HW_RENDER");
             *((unsigned*) data) = retro_hw_context_type::RETRO_HW_CONTEXT_OPENGLES3;
+#if defined(__ANDROID__)
+            if (preferVulkan && libretrodroid::VulkanHost::getInstance().isSupported()) {
+                *((unsigned*) data) = retro_hw_context_type::RETRO_HW_CONTEXT_VULKAN;
+            }
+#endif
             return true;
         }
+
+#if defined(__ANDROID__)
+        case RETRO_ENVIRONMENT_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT: {
+            LOGD("Called RETRO_ENVIRONMENT_GET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_SUPPORT");
+            auto negotiation = static_cast<struct retro_hw_render_context_negotiation_interface*>(data);
+            if (negotiation->interface_type != RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN) return false;
+            // create_device; a core may still pass a newer structure, of which only that much is used.
+            negotiation->interface_version = 1;
+            return true;
+        }
+
+        case RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE: {
+            LOGD("Called RETRO_ENVIRONMENT_SET_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE");
+            auto negotiation = static_cast<const struct retro_hw_render_context_negotiation_interface*>(data);
+            if (!useVulkan || negotiation == nullptr
+                || negotiation->interface_type != RETRO_HW_RENDER_CONTEXT_NEGOTIATION_INTERFACE_VULKAN) {
+                return false;
+            }
+            vulkanNegotiation = static_cast<const struct retro_hw_render_context_negotiation_interface_vulkan*>(data);
+            return true;
+        }
+
+        case RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE: {
+            LOGD("Called RETRO_ENVIRONMENT_GET_HW_RENDER_INTERFACE");
+            auto renderInterface = useVulkan ? libretrodroid::VulkanHost::getInstance().getInterface() : nullptr;
+            if (renderInterface == nullptr) return false;
+            *static_cast<const struct retro_hw_render_interface**>(data) =
+                reinterpret_cast<const struct retro_hw_render_interface*>(renderInterface);
+            return true;
+        }
+#endif
 
         case RETRO_ENVIRONMENT_SET_HW_RENDER:
             LOGD("Called RETRO_ENVIRONMENT_SET_HW_RENDER");
@@ -435,6 +496,18 @@ struct retro_netpacket_callback* Environment::getRetroNetpacketCallback() const 
 
 int Environment::getPixelFormat() const {
     return pixelFormat;
+}
+
+void Environment::setPreferVulkan(bool value) {
+    preferVulkan = value;
+}
+
+bool Environment::isUseVulkan() const {
+    return useVulkan;
+}
+
+const struct retro_hw_render_context_negotiation_interface_vulkan* Environment::getVulkanNegotiation() const {
+    return vulkanNegotiation;
 }
 
 bool Environment::isUseHwAcceleration() const {
