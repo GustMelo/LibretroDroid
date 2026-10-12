@@ -12,7 +12,12 @@ out.mkdir(parents=True, exist_ok=True)
 version = next(line.split('=', 1)[1] for line in (root / 'gradle.properties').read_text().splitlines() if line.startswith('version='))
 commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
 files = {}
-for name, directory in {'maven': 'build/maven', 'cores-android': '.cache/cores/android', 'cores-ios': '.cache/cores/ios', 'angle-ios': '.cache/angle', 'native-ios': 'build/native-xcframework'}.items():
+# cores-assets: the files some cores read from the frontend's system folder, one zip per core (build-cores.sh).
+sources = {
+    'maven': 'build/maven', 'cores-android': '.cache/cores/android', 'cores-assets': '.cache/cores/assets',
+    'cores-ios': '.cache/cores/ios', 'angle-ios': '.cache/angle', 'native-ios': 'build/native-xcframework',
+}
+for name, directory in sources.items():
     source = root / directory
     if not source.is_dir() or not any(source.iterdir()):
         raise SystemExit(f'Missing build output: {source}')
