@@ -43,7 +43,9 @@ import com.libretrodroid.engine.native.re_serialize_sram
 import com.libretrodroid.engine.native.re_set_buttons
 import com.libretrodroid.engine.native.re_set_audio_tap
 import com.libretrodroid.engine.native.re_set_audio_tap_only
+import com.libretrodroid.engine.native.re_release_touch
 import com.libretrodroid.engine.native.re_set_motion
+import com.libretrodroid.engine.native.re_set_touch
 import com.libretrodroid.engine.native.re_set_multitap
 import com.libretrodroid.engine.native.re_stream_frame
 import com.libretrodroid.engine.native.re_stream_stop
@@ -146,7 +148,9 @@ import platform.QuartzCore.CACurrentMediaTime
 import platform.QuartzCore.CADisplayLink
 import platform.QuartzCore.CAFrameRateRangeMake
 import platform.UIKit.UIColor
+import platform.UIKit.UIEvent
 import platform.UIKit.UIScreen
+import platform.UIKit.UITouch
 import platform.UIKit.UIView
 import platform.darwin.DISPATCH_TIME_FOREVER
 import platform.darwin.NSObject
@@ -172,6 +176,8 @@ data class RetroGame(
 
     /** Deprecated in favour of [aspectRatio]; true is [AspectRatio.FILL]. */
     val widescreen: Boolean = false,
+    /** The console's pad has analog sticks: controllers' sticks reach the game as axes, not as directions. */
+    val analogSticks: Boolean = false,
     /** [AspectRatio.CORE], [AspectRatio.FILL] or a fixed width/height ratio such as 16/9. */
     val aspectRatio: Float = AspectRatio.CORE,
     /** Core options set before the core starts: those marked "(Restart)" only take effect this way. */
@@ -256,6 +262,7 @@ class RetroPlayer(
     private val touchButtons = atomic(0)
     private val remoteButtons = AtomicIntArray(PORTS)
     private val remoteAxes = AtomicLongArray(PORTS)
+    private val localAxes = atomic(0L)
     private val appliedAxes = LongArray(PORTS)
     @Volatile private var localPort = 0
     @Volatile private var sink: RetroStreamSink? = null
@@ -289,6 +296,14 @@ class RetroPlayer(
     /** Port that this device's touch pad and controllers drive; -1 sends them nowhere. */
     fun setLocalPort(port: Int) {
         localPort = port.takeIf { it in 0 until PORTS } ?: -1
+    }
+
+    /**
+     * The sticks of this device's touch pad or controller, each axis in [-1, 1] with +y down. They steer the
+     * local port, for the consoles whose pad has a stick; a player on another device steering that port wins.
+     */
+    fun setLocalSticks(lx: Float, ly: Float, rx: Float, ry: Float) {
+        localAxes.value = packSticks(lx, ly, rx, ry)
     }
 
     /**
@@ -374,6 +389,7 @@ class RetroPlayer(
         check(!running) { "already started" }
         running = true
         configureAudioSession()
+        gamepads.analog = game.analogSticks
         gamepads.start()
         val layer = interpretCPointer<kotlinx.cinterop.CPointed>(view.layer.objcPtr())
         NSThread(block = { renderThread(layer) }).apply {
@@ -748,13 +764,18 @@ class RetroPlayer(
             }
             val mask = remoteButtons[port].value or here
             re_set_buttons(port.toUInt(), mask.toUShort())
-            val axes = remoteAxes[port].value
+            val remote = remoteAxes[port].value
+            val steersHere = if (sharing) port == 0 else port == localPort
+            // A controller's sticks come before the touch pad's, which is at rest while a controller plays.
+            val local = gamepads.axes.takeIf { it != 0L } ?: localAxes.value
+            val axes = if (remote == 0L && steersHere) local else remote
             if (axes != appliedAxes[port]) {
                 appliedAxes[port] = axes
                 re_set_motion(port.toUInt(), SOURCE_LEFT, axis(axes, 0), axis(axes, 1))
                 re_set_motion(port.toUInt(), SOURCE_RIGHT, axis(axes, 2), axis(axes, 3))
             }
         }
+        (view as GameView).applyTouch()
         linkSession?.let {
             it.pump()
             it.endReason?.let { reason ->
@@ -915,9 +936,50 @@ private class GameView : UIView(frame = CGRectZero.readValue()) {
     @Volatile var pixelSize: Pair<Int, Int> = 1 to 1
         private set
 
+    /** Where a finger is on the picture, as the engine takes it, and whether it has lifted since. */
+    private val touchPoint = atomic(NO_TOUCH)
+    private val touchLifted = atomic(false)
+
     init {
         backgroundColor = UIColor.blackColor
         multipleTouchEnabled = true
+    }
+
+    // A finger on the picture is the stylus of a console with a touch screen. The touch pad drawn over this view
+    // keeps the touches that land on its controls; the rest come here.
+    override fun touchesBegan(touches: Set<*>, withEvent: UIEvent?) = point(touches)
+
+    override fun touchesMoved(touches: Set<*>, withEvent: UIEvent?) = point(touches)
+
+    override fun touchesEnded(touches: Set<*>, withEvent: UIEvent?) {
+        touchLifted.value = true
+    }
+
+    override fun touchesCancelled(touches: Set<*>, withEvent: UIEvent?) {
+        touchLifted.value = true
+    }
+
+    private fun point(touches: Set<*>) {
+        val touch = touches.firstOrNull() as? UITouch ?: return
+        val (x, y) = touch.locationInView(this).useContents { x to y }
+        val (width, height) = bounds.useContents { size.width to size.height }
+        if (width <= 0.0 || height <= 0.0) return
+        val across = (2 * x / width - 1).coerceIn(-1.0, 1.0).toFloat()
+        val down = (2 * y / height - 1).coerceIn(-1.0, 1.0).toFloat()
+        touchPoint.value = (across.toRawBits().toLong() shl 32) or (down.toRawBits().toLong() and 0xffffffffL)
+    }
+
+    /**
+     * Hands the finger's news to the engine, on the render thread, once a frame. A position goes first and the
+     * lift waits for the next frame, so a tap that began and ended between two frames is still a press.
+     */
+    fun applyTouch() {
+        val point = touchPoint.getAndSet(NO_TOUCH)
+        if (point != NO_TOUCH) {
+            re_set_touch(Float.fromBits((point shr 32).toInt()), Float.fromBits(point.toInt()))
+        } else if (touchLifted.getAndSet(false)) {
+            re_release_touch()
+        }
     }
 
     override fun layoutSubviews() {
@@ -951,6 +1013,9 @@ private class GameView : UIView(frame = CGRectZero.readValue()) {
 
     fun takeScreen(): UIScreen? = pendingScreen.getAndSet(null)
 }
+
+/** No finger position waiting in a [GameView]: a pattern no pair of coordinates packs to (its first half is not a number). */
+private const val NO_TOUCH = Long.MAX_VALUE
 
 private inline fun takeBytes(read: (kotlinx.cinterop.CPointer<size_tVar>) -> kotlinx.cinterop.CPointer<UByteVar>?): ByteArray? = memScoped {
     val size = alloc<size_tVar>()

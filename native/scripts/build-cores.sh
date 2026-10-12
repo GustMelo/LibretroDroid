@@ -96,26 +96,63 @@ build_android_abi() { # core, src, key, build, jni, abi, extra
   echo "$key" > "$stamp"
 }
 
+# The engine draws through ANGLE on iOS, so a core that draws with OpenGL ES has to call ANGLE too, not Apple's
+# own OpenGL ES, which has no context here. Cores include <OpenGLES/ES3/gl.h> and link "-framework OpenGLES": this
+# makes a framework of that name, with the SDK's own headers (the ones the cores were written against) and ANGLE's
+# libGLESv2 as its binary, and puts it in front of the SDK's. The functions are the same ones; the core then
+# loads @rpath/libGLESv2.framework, the one the app already carries.
+ios_gl_shim() { # sdk(iphoneos|iphonesimulator)
+  local slice=ios-arm64 angle sdk_path shim="$WORK/ios-gl/$1"
+  [ "$1" = iphoneos ] || slice=ios-arm64-simulator
+  angle="$(cd "${ANGLE:-$HERE/../../.cache/angle}" && pwd)"
+  sdk_path="$(xcrun --sdk "$1" --show-sdk-path)"
+  rm -rf "$shim" && mkdir -p "$shim/OpenGLES.framework"
+  ln -s "$sdk_path/System/Library/Frameworks/OpenGLES.framework/Headers" "$shim/OpenGLES.framework/Headers"
+  ln -s "$angle/libGLESv2.xcframework/$slice/libGLESv2.framework/libGLESv2" "$shim/OpenGLES.framework/OpenGLES"
+  echo "$shim"
+}
+
 build_ios_slice() { # core, src, build, extra, sdk(iphoneos|iphonesimulator)
-  local name="$1_libretro" sdk_path dylib min_flag platform_name
+  local name="$1_libretro" sdk_path dylib min_flag platform_name extra=" $4 " gl="" defines="" word kept=""
   sdk_path="$(xcrun --sdk "$5" --show-sdk-path)"
   if [ "$5" = iphoneos ]; then
     min_flag="-miphoneos-version-min=$IOS_MIN"; platform_name=iPhoneOS
   else
     min_flag="-mios-simulator-version-min=$IOS_MIN"; platform_name=iPhoneSimulator
   fi
+  # "GL=angle" among a core's iOS arguments asks for the OpenGL ES above; "@SRC@" stands for its source folder.
+  if [[ "$extra" == *" GL=angle "* ]]; then
+    extra="${extra/ GL=angle / }"
+    gl="$(ios_gl_shim "$5")"
+    # IOS is how libretro's own headers know to take OpenGL ES from the framework.
+    gl="-F$gl -DIOS"
+  fi
+  extra="${extra//@SRC@/$2}"
+  # "CFLAG=<flag>" words are compiler flags for the core's iOS build, apart from its own build arguments.
+  for word in $extra; do
+    if [[ "$word" == CFLAG=* ]]; then defines="$defines ${word#CFLAG=}"; else kept="$kept $word"; fi
+  done
+  extra="$kept"
   if [[ "$3" == cmake:* ]]; then
-    local build="$WORK/build/$1-$5"
+    local build="$WORK/build/$1-$5" arguments="${3#cmake:}" flags=()
+    # A core whose iOS build is configured differently from its Android one says how.
+    [ -z "${extra// /}" ] || arguments="$extra"
+    [ -z "$gl$defines" ] || flags=(-DCMAKE_C_FLAGS="$gl$defines" -DCMAKE_CXX_FLAGS="$gl$defines"
+      -DCMAKE_OBJC_FLAGS="$gl$defines" -DCMAKE_OBJCXX_FLAGS="$gl$defines"
+      -DCMAKE_SHARED_LINKER_FLAGS="$gl" -DCMAKE_MODULE_LINKER_FLAGS="$gl")
     "$(cmake_bin)/cmake" -S "$2" -B "$build" -G Ninja -DCMAKE_MAKE_PROGRAM="$(cmake_bin)/ninja" \
       -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
-      -DCMAKE_OSX_SYSROOT="$sdk_path" -DCMAKE_BUILD_TYPE=Release ${3#cmake:}
+      -DCMAKE_OSX_SYSROOT="$sdk_path" -DCMAKE_BUILD_TYPE=Release ${flags[@]+"${flags[@]}"} $arguments
     "$(cmake_bin)/ninja" -C "$build" -j "$JOBS"
     dylib="$(find "$build" -name "*_libretro*.dylib" | head -1)"
   else
-    local dir="$2/$(dirname "$3")" makefile
+    local dir="$2/$(dirname "$3")" makefile compilers=()
     makefile="$(basename "$3")"
     git -C "$2" clean -qfdx >/dev/null
-    make -C "$dir" -f "$makefile" -j"$JOBS" platform=ios-arm64 IOSSDK="$sdk_path" MINVERSION="$min_flag" $4
+    [ -z "$gl$defines" ] || compilers=(CC="clang -arch arm64 -isysroot $sdk_path $min_flag $gl$defines"
+      CXX="clang++ -arch arm64 -isysroot $sdk_path $min_flag $gl$defines")
+    make -C "$dir" -f "$makefile" -j"$JOBS" platform=ios-arm64 IOSSDK="$sdk_path" MINVERSION="$min_flag" \
+      ${compilers[@]+"${compilers[@]}"} $extra
     dylib="$(ls "$dir"/*_libretro_ios.dylib | head -1)"
   fi
 
@@ -139,13 +176,16 @@ build_ios_slice() { # core, src, build, extra, sdk(iphoneos|iphonesimulator)
 PLIST
 }
 
-build_ios() { # core, src, key, build, extra
-  local name="$1_libretro" stamp="$OUT/ios/.$1.build" key="$3-sim$SIMULATOR"
+build_ios() { # core, src, key, build, extra, targets
+  local name="$1_libretro" stamp="$OUT/ios/.$1.build" simulator="$SIMULATOR"
+  # "ios-device" among a core's targets: built for the phone only, where its simulator build is not kept up.
+  [[ " $6 " != *" ios-device "* ]] || simulator=0
+  local key="$3-sim$simulator"
   [ -d "$OUT/ios/$name.xcframework" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$key" ] && return
   local frameworks=()
   build_ios_slice "$1" "$2" "$4" "$5" iphoneos
   frameworks+=(-framework "$WORK/ios/iphoneos/$name.framework")
-  if [ "$SIMULATOR" = 1 ]; then
+  if [ "$simulator" = 1 ]; then
     build_ios_slice "$1" "$2" "$4" "$5" iphonesimulator
     frameworks+=(-framework "$WORK/ios/iphonesimulator/$name.framework")
   fi
@@ -170,8 +210,8 @@ pack_assets() { # core, src
 
 grep -v '^\s*#' "$CORES/cores.properties" | grep -v '^\s*$' | while IFS='|' read -r core repo commit build jni ios_extra targets android_extra ndk; do
   [ "$ONLY" = "  " ] || [[ "$ONLY" == *" $core "* ]] || continue
-  # targets: the ABIs and "ios" this core is built for; empty means all of them.
-  [ "$PLATFORM" != ios ] || [ -z "$targets" ] || [[ " $targets " == *" ios "* ]] || continue
+  # targets: the ABIs and "ios" (or "ios-device") this core is built for; empty means all of them.
+  [ "$PLATFORM" != ios ] || [ -z "$targets" ] || [[ " $targets " == *" ios"* ]] || continue
   CORE_NDK="$ndk"
   echo "core $core @ ${commit:0:7} ($PLATFORM)"
   checkout "$core" "$repo" "$commit"
@@ -180,7 +220,7 @@ grep -v '^\s*#' "$CORES/cores.properties" | grep -v '^\s*$' | while IFS='|' read
     android)
       build_android "$core" "$WORK/$core" "$key" "$build" "$jni" "$targets" "$android_extra"
       pack_assets "$core" "$WORK/$core" ;;
-    ios) build_ios "$core" "$WORK/$core" "$key" "$build" "$ios_extra" ;;
+    ios) build_ios "$core" "$WORK/$core" "$key" "$build" "$ios_extra" "$targets" ;;
     *) echo "plataforma desconhecida: $PLATFORM" >&2; exit 1 ;;
   esac
 done

@@ -34,6 +34,16 @@ internal class GamepadInput {
 
     val buttons: Int get() = mask.value or keyboardMask.value
 
+    /**
+     * The console's pad has sticks: a controller's sticks are then axes for the game ([axes]) instead of pressing
+     * the directions of the cross.
+     */
+    @kotlin.concurrent.Volatile var analog = false
+    private val sticks = atomic(0L)
+
+    /** The sticks of the controller that moved last, packed as [RetroPlayer] packs them; 0 at rest. */
+    val axes: Long get() = sticks.value
+
     fun buttons(player: Int): Int = (masks.getOrNull(player)?.value ?: 0) or if (player == 0) keyboardMask.value else 0
 
     fun start() {
@@ -60,6 +70,11 @@ internal class GamepadInput {
         controller.extendedGamepad?.valueChangedHandler = { gamepad, _ ->
             gamepad?.let { pad ->
                 val index = GCController.controllers().indexOf(controller)
+                // GameController's y grows upwards, the engine's downwards.
+                if (analog) sticks.value = packSticks(
+                    pad.leftThumbstick.xAxis.value, -pad.leftThumbstick.yAxis.value,
+                    pad.rightThumbstick.xAxis.value, -pad.rightThumbstick.yAxis.value,
+                )
                 val physical = pad.physical()
                 val bits = mapper?.gamepad(index.coerceAtLeast(0), physical) ?: classic(physical)
                 mask.value = bits
@@ -91,10 +106,11 @@ internal class GamepadInput {
         set(P_START, buttonMenu.pressed)
         set(P_SELECT, buttonOptions?.pressed == true)
         set(P_HOME, buttonHome?.pressed == true)
-        set(P_UP, dpad.up.pressed || stick.yAxis.value > STICK)
-        set(P_DOWN, dpad.down.pressed || stick.yAxis.value < -STICK)
-        set(P_LEFT, dpad.left.pressed || stick.xAxis.value < -STICK)
-        set(P_RIGHT, dpad.right.pressed || stick.xAxis.value > STICK)
+        val steers = !analog
+        set(P_UP, dpad.up.pressed || (steers && stick.yAxis.value > STICK))
+        set(P_DOWN, dpad.down.pressed || (steers && stick.yAxis.value < -STICK))
+        set(P_LEFT, dpad.left.pressed || (steers && stick.xAxis.value < -STICK))
+        set(P_RIGHT, dpad.right.pressed || (steers && stick.xAxis.value > STICK))
         return bits
     }
 
@@ -147,3 +163,12 @@ internal class GamepadInput {
         const val R2 = 13
     }
 }
+
+/**
+ * Two sticks as one value, the way [RetroPlayer] keeps a port's axes: left x, left y, right x, right y, each a
+ * signed 16-bit number from an axis in [-1, 1], +y down.
+ */
+internal fun packSticks(lx: Float, ly: Float, rx: Float, ry: Float): Long =
+    listOf(lx, ly, rx, ry).fold(0L) { packed, value ->
+        (packed shl 16) or ((value.coerceIn(-1f, 1f) * Short.MAX_VALUE).toInt().toLong() and 0xffff)
+    }

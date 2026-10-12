@@ -366,6 +366,15 @@ void re_set_motion(unsigned port, int source, float x, float y) {
     LibretroDroid::getInstance().onMotionEvent(port, source, x, y);
 }
 
+void re_set_touch(float x, float y) {
+    LibretroDroid::getInstance().onTouchEvent(x, y);
+}
+
+void re_release_touch(void) {
+    // Far outside the view, as Android reports a lifted finger: the pointer reads as not pressed.
+    LibretroDroid::getInstance().onTouchEvent(-10.0F, 10.0F);
+}
+
 bool re_set_multitap(bool enabled) {
     bool active = false;
     guarded("multitap", [&] { active = LibretroDroid::getInstance().setMultitap(enabled); });

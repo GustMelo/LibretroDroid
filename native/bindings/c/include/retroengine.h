@@ -110,6 +110,11 @@ void re_netpacket_disconnected(uint16_t client_id);
 
 /* Analog input for any port. source: 0 d-pad, 1 left stick, 2 right stick; axes in [-1, 1], +y down. */
 void re_set_motion(unsigned port, int source, float x, float y);
+/* A finger on the picture, for a core with a touch screen (RETRO_DEVICE_POINTER): x and y in [-1, 1] across the
+ * view, +y down. The engine maps it onto the game's picture. */
+void re_set_touch(float x, float y);
+/* The finger left the picture. */
+void re_release_touch(void);
 /* Multitap on port 2 when the core offers one (up to four players); false restores a plain pad.
  * Returns whether the multitap is now active. */
 bool re_set_multitap(bool enabled);
