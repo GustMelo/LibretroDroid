@@ -81,7 +81,7 @@ if(ANDROID)
             bindings/jni
     )
     target_link_options(libretrodroid PRIVATE "-Wl,-z,max-page-size=16384")
-    target_link_libraries(libretrodroid android log EGL oboe GLESv3 vulkan nativewindow)
+    target_link_libraries(libretrodroid android log EGL oboe GLESv3 vulkan nativewindow mediandk)
 
 elseif(APPLE)
     set(ANGLE_INCLUDE_DIR "${RE_DIR}/../../.cache/angle/include" CACHE PATH "ANGLE headers (EGL/, GLES2/, GLES3/)")

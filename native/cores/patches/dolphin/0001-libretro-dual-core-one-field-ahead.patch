@@ -1,0 +1,155 @@
+diff --git a/Source/Core/Core/Core.cpp b/Source/Core/Core/Core.cpp
+index cda66bffd1..d59dad2802 100644
+--- a/Source/Core/Core/Core.cpp
++++ b/Source/Core/Core/Core.cpp
+@@ -116,6 +116,19 @@ static
+ #endif
+ std::atomic<bool> s_stop_frame_step;
+ 
++#ifdef __LIBRETRO__
++// Dual core under a frontend that asks for one field per retro_run(): the fields it asked for and the ones the
++// CPU thread finished. The CPU thread works one field ahead of the frontend, so the console's CPU is emulated
++// while the frontend draws and presents the field before, and stops only when it gets further ahead than that.
++// Pausing it at every field instead left it idle through all of that, and the two threads took turns.
++static u32 s_fields_requested = 0;
++static u32 s_fields_finished = 0;
++static constexpr s32 FIELDS_AHEAD = 1;
++// Held while either thread counts a field and acts on it: the CPU thread deciding to stop and the frontend's
++// thread deciding it has nothing to wake must not cross, or both end up waiting for the other.
++static std::mutex s_fields_mutex;
++#endif
++
+ // Threads other than the CPU thread must hold this when taking on the role of the CPU thread.
+ // The CPU thread is not required to hold this when doing normal work, but must hold it if writing
+ // to s_state.
+@@ -565,6 +578,13 @@ void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot,
+   }};
+ 
+   Common::SetCurrentThreadName("Emuthread - Starting");
++#ifdef __LIBRETRO__
++  {
++    std::lock_guard fields_lock(s_fields_mutex);
++    s_fields_requested = 0;
++    s_fields_finished = 0;
++  }
++#endif
+ 
+   // This will become the CPU thread.
+   DeclareAsCPUThread();
+@@ -981,6 +1001,25 @@ void Callback_FramePresented(const PresentInfo& present_info)
+ // Called from VideoInterface::Update (CPU thread) at emulated field boundaries
+ void Callback_NewField(Core::System& system)
+ {
++#ifdef __LIBRETRO__
++  if (system.IsDualCoreMode())
++  {
++    bool stopped = false;
++    {
++      std::lock_guard fields_lock(s_fields_mutex);
++      stopped = static_cast<s32>(++s_fields_finished - s_fields_requested) >= FIELDS_AHEAD;
++      if (stopped)
++        system.GetCPU().Break();
++    }
++    if (stopped)
++      NotifyStateChanged(Core::GetState(system));
++    // A field is ready: the frontend's thread leaves the GPU loop once it has drawn it. Said after stopping, so
++    // that whenever it comes back for the next one it finds this thread stopped and wakes it.
++    system.GetFifo().StopGpuLoop();
++    AchievementManager::GetInstance().DoFrame();
++    return;
++  }
++#endif
+   if (s_frame_step)
+   {
+ #ifndef __LIBRETRO__
+@@ -1145,6 +1184,18 @@ void DoFrameStep(Core::System& system)
+   }
+ }
+ 
++#ifdef __LIBRETRO__
++void RequestField(Core::System& system)
++{
++  std::lock_guard lock(s_core_mutex);
++  std::lock_guard fields_lock(s_fields_mutex);
++  ++s_fields_requested;
++  // A CPU thread that is still running is working on this field or on the one after it.
++  if (GetState(system) == State::Paused)
++    SetState(system, State::Running, false);
++}
++#endif
++
+ void UpdateInputGate(bool require_focus, bool require_full_focus)
+ {
+   // If the user accepts background input, controls should pass even if an on screen interface is on
+diff --git a/Source/Core/Core/Core.h b/Source/Core/Core/Core.h
+index 7af6cadc92..92524435df 100644
+--- a/Source/Core/Core/Core.h
++++ b/Source/Core/Core/Core.h
+@@ -202,6 +202,8 @@ void UpdateTitle(Core::System& system);
+   extern std::thread s_emu_thread;
+   extern bool s_frame_step;
+   extern std::atomic<bool> s_stop_frame_step;
++  // Dual core: asks the CPU thread for one more field and wakes it when it had stopped to wait for the frontend.
++  void RequestField(Core::System& system);
+ #endif
+ 
+ }  // namespace Core
+diff --git a/Source/Core/DolphinLibretro/Main.cpp b/Source/Core/DolphinLibretro/Main.cpp
+index 09cbb1636c..f4d7284e2d 100644
+--- a/Source/Core/DolphinLibretro/Main.cpp
++++ b/Source/Core/DolphinLibretro/Main.cpp
+@@ -490,7 +490,7 @@ void retro_run(void)
+ 
+   if (system.IsDualCoreMode())
+   {
+-    Core::DoFrameStep(system);
++    Core::RequestField(system);
+     system.GetFifo().RunGpuLoop();
+   }
+   else
+diff --git a/Source/Core/VideoCommon/Fifo.cpp b/Source/Core/VideoCommon/Fifo.cpp
+index d40bd0e8db..0372fffb6c 100644
+--- a/Source/Core/VideoCommon/Fifo.cpp
++++ b/Source/Core/VideoCommon/Fifo.cpp
+@@ -138,7 +138,11 @@ void FifoManager::ExitGpuLoop()
+ #ifdef __LIBRETRO__
+ void FifoManager::StopGpuLoop()
+ {
+-  m_gpu_mainloop.Stop(Common::BlockingLoop::StopMode::NonBlock);
++  // The CPU thread ends a frame while the frontend's thread may be anywhere: inside the loop, or back in the
++  // frontend between two retro_run(). A stop the loop isn't there to see is forgotten when it starts again, and
++  // the loop would then wait for a CPU thread that has just paused itself. The request is kept until it is seen.
++  m_stop_requested.store(true);
++  m_gpu_mainloop.Wakeup();
+ }
+ #endif
+ 
+@@ -297,6 +301,13 @@ void FifoManager::RunGpuLoop()
+         // Run events from the CPU thread.
+         AsyncRequests::GetInstance()->PullEvents();
+ 
++#ifdef __LIBRETRO__
++        // What is already queued is still run below; the loop ends after it. That includes what the CPU thread
++        // writes for the next field meanwhile: following it here is work the next call doesn't have to do.
++        if (m_stop_requested.exchange(false))
++          m_gpu_mainloop.Stop(Common::BlockingLoop::StopMode::NonBlock);
++#endif
++
+         // Do nothing while paused
+         if (!m_emu_running_state.IsSet())
+           return;
+diff --git a/Source/Core/VideoCommon/Fifo.h b/Source/Core/VideoCommon/Fifo.h
+index e5cb6bd0ac..6503e9f080 100644
+--- a/Source/Core/VideoCommon/Fifo.h
++++ b/Source/Core/VideoCommon/Fifo.h
+@@ -90,6 +90,10 @@ private:
+   static constexpr u32 FIFO_SIZE = 2 * 1024 * 1024;
+ 
+   Common::BlockingLoop m_gpu_mainloop;
++#ifdef __LIBRETRO__
++  // A stop asked for while the frontend's thread is between two RunGpuLoop() calls: BlockingLoop drops those.
++  std::atomic<bool> m_stop_requested = false;
++#endif
+ 
+   Common::Flag m_emu_running_state;
+ 

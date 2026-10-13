@@ -33,6 +33,16 @@ const char* const DEVICE_EXTENSIONS[] = {
 };
 const uint32_t DEVICE_EXTENSION_COUNT = sizeof(DEVICE_EXTENSIONS) / sizeof(DEVICE_EXTENSIONS[0]);
 
+// What the surface a negotiating core is handed needs. Every Android device with Vulkan has both.
+const char* const INSTANCE_EXTENSIONS[] = {
+    VK_KHR_SURFACE_EXTENSION_NAME,
+    VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
+};
+const uint32_t INSTANCE_EXTENSION_COUNT = sizeof(INSTANCE_EXTENSIONS) / sizeof(INSTANCE_EXTENSIONS[0]);
+
+// Nothing is ever drawn on the surface: the core asks what it can do and creates its swapchain "on" it.
+const int32_t SURFACE_SIZE = 16;
+
 // A frame's copy takes well under a millisecond; a GPU that hasn't answered by now is gone.
 const uint64_t FENCE_TIMEOUT_NS = 1000000000ULL;
 
@@ -98,10 +108,29 @@ bool VulkanHost::createInstance(const VkApplicationInfo* coreInfo) {
 
     VkInstanceCreateInfo info { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     info.pApplicationInfo = &application;
+    info.enabledExtensionCount = INSTANCE_EXTENSION_COUNT;
+    info.ppEnabledExtensionNames = INSTANCE_EXTENSIONS;
     VkResult result = vkCreateInstance(&info, nullptr, &instance);
     if (result != VK_SUCCESS) {
         LOGE("Vulkan: vkCreateInstance failed (%d)", result);
         instance = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
+}
+
+bool VulkanHost::createSurface() {
+    if (AImageReader_new(SURFACE_SIZE, SURFACE_SIZE, AIMAGE_FORMAT_RGBA_8888, 2, &surfaceWindow) != AMEDIA_OK) {
+        surfaceWindow = nullptr;
+        return false;
+    }
+    ANativeWindow* window = nullptr;
+    if (AImageReader_getWindow(surfaceWindow, &window) != AMEDIA_OK || window == nullptr) return false;
+
+    VkAndroidSurfaceCreateInfoKHR info { VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR };
+    info.window = window;
+    if (vkCreateAndroidSurfaceKHR(instance, &info, nullptr, &surface) != VK_SUCCESS) {
+        surface = VK_NULL_HANDLE;
         return false;
     }
     return true;
@@ -171,8 +200,8 @@ bool VulkanHost::createDevice(const struct retro_hw_render_context_negotiation_i
         // The core creates the device, with its own features and extensions plus the ones asked for here.
         struct retro_vulkan_context context {};
         VkPhysicalDeviceFeatures features {};
-        created = negotiation->create_device(
-            &context, instance, gpu, VK_NULL_HANDLE, vkGetInstanceProcAddr,
+        created = createSurface() && negotiation->create_device(
+            &context, instance, gpu, surface, vkGetInstanceProcAddr,
             const_cast<const char**>(DEVICE_EXTENSIONS), DEVICE_EXTENSION_COUNT, nullptr, 0, &features
         ) && context.device != VK_NULL_HANDLE;
         if (created) {
@@ -421,8 +450,12 @@ void VulkanHost::destroy() {
         // A core that created the device may ask to be the one that destroys it.
         if (destroyCoreDevice != nullptr) destroyCoreDevice(); else vkDestroyDevice(device, nullptr);
     }
+    if (surface != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance, surface, nullptr);
+    if (surfaceWindow != nullptr) AImageReader_delete(surfaceWindow);
     if (instance != VK_NULL_HANDLE) vkDestroyInstance(instance, nullptr);
 
+    surface = VK_NULL_HANDLE;
+    surfaceWindow = nullptr;
     instance = VK_NULL_HANDLE;
     gpu = VK_NULL_HANDLE;
     device = VK_NULL_HANDLE;

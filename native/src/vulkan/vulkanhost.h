@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <android/hardware_buffer.h>
+#include <media/NdkImageReader.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_android.h>
 
@@ -38,6 +39,10 @@ namespace libretrodroid {
  *
  * The device is the core's when it negotiates one (create_device) and this host's otherwise; either way it is
  * created with the hardware-buffer extensions the copy needs, and outlives the GL surface.
+ *
+ * A negotiating core is promised a surface, and some (Dolphin) draw nothing without one: they size and create a
+ * swapchain against it, even though its images end up in set_image and never on that surface. It gets one that
+ * leads nowhere, over an image reader's window nobody reads.
  */
 class VulkanHost {
 public:
@@ -95,6 +100,7 @@ private:
     };
 
     bool createInstance(const VkApplicationInfo* coreInfo);
+    bool createSurface();
     bool pickGpu();
     bool createOwnDevice();
     bool createFrameObjects();
@@ -115,6 +121,8 @@ private:
     int supported = -1;
 
     VkInstance instance = VK_NULL_HANDLE;
+    AImageReader* surfaceWindow = nullptr;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkPhysicalDevice gpu = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
     VkQueue queue = VK_NULL_HANDLE;
