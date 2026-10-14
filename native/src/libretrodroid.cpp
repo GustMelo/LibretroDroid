@@ -585,7 +585,11 @@ void LibretroDroid::step() {
         if (fpsSync) {
             unsigned requestedFrames = fpsSync->advanceFrames();
 
-            frames = std::min(requestedFrames, frameSkip ? 2u : 1u);
+            // A second frame makes up for lost time when the frame left undrawn is the cheap one. A core that
+            // alone takes longer than a frame lasts (a 3D console in a heavy scene) gains nothing from it: it
+            // would stay late and show half as many frames, so it runs one and the game slows down instead.
+            bool coreKeepsUp = frameCostUs < 1e6 / contentFps;
+            frames = std::min(requestedFrames, frameSkip && coreKeepsUp ? 2u : 1u);
         }
 
         runFrames(frames);

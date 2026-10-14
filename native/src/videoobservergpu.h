@@ -8,7 +8,9 @@ namespace libretrodroid {
 class VideoObserverGpu {
 public:
     ~VideoObserverGpu() { release(); }
-    void capture(unsigned framebuffer, unsigned w, unsigned h, float aspect, unsigned rotation, bool bottomUp) {
+    // [framebuffer] is asked for only when a frame is read: a renderer may have to wait for the GPU to answer it.
+    template <typename Framebuffer>
+    void capture(Framebuffer&& framebuffer, unsigned w, unsigned h, float aspect, unsigned rotation, bool bottomUp) {
         GLint previousBuffer = 0, previousFramebuffer = 0, alignment = 0;
         glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousBuffer);
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
@@ -34,7 +36,7 @@ public:
             if (!buffer) glGenBuffers(1, &buffer);
             glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer);
             glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(w) * h * 4, nullptr, GL_STREAM_READ);
-            glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(framebuffer()));
             glPixelStorei(GL_PACK_ALIGNMENT, 1);
             glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
             fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);

@@ -43,7 +43,7 @@ const uint32_t INSTANCE_EXTENSION_COUNT = sizeof(INSTANCE_EXTENSIONS) / sizeof(I
 // Nothing is ever drawn on the surface: the core asks what it can do and creates its swapchain "on" it.
 const int32_t SURFACE_SIZE = 16;
 
-// A frame's copy takes well under a millisecond; a GPU that hasn't answered by now is gone.
+// The copy waits for the frame's own drawing, milliseconds at most; a GPU that hasn't answered by now is gone.
 const uint64_t FENCE_TIMEOUT_NS = 1000000000ULL;
 
 VkApplicationInfo hostApplicationInfo() {
@@ -399,6 +399,8 @@ void VulkanHost::recordCopy(unsigned width, unsigned height) {
 
 bool VulkanHost::present(unsigned width, unsigned height) {
     if (!hasDevice() || !frame.valid || width == 0 || height == 0) return false;
+    // The command buffer and the fence are the last copy's until the GPU is done with it.
+    finishFrame();
     if (!ensureTarget(width, height)) {
         LOGE("Vulkan: could not allocate a %ux%u frame buffer", width, height);
         return false;
@@ -436,9 +438,17 @@ bool VulkanHost::present(unsigned width, unsigned height) {
         return false;
     }
 
-    result = vkWaitForFences(device, 1, &fence, VK_TRUE, FENCE_TIMEOUT_NS);
+    copyPending = true;
+    return true;
+}
+
+void VulkanHost::finishFrame() {
+    if (!copyPending) return;
+    copyPending = false;
+    if (vkWaitForFences(device, 1, &fence, VK_TRUE, FENCE_TIMEOUT_NS) != VK_SUCCESS) {
+        LOGE("Vulkan: the GPU did not finish the frame copy");
+    }
     vkResetFences(device, 1, &fence);
-    return result == VK_SUCCESS;
 }
 
 void VulkanHost::destroy() {
@@ -470,6 +480,7 @@ void VulkanHost::destroy() {
     frame = Frame {};
     coreCommands.clear();
     signalSemaphore = VK_NULL_HANDLE;
+    copyPending = false;
 }
 
 void VulkanHost::setImage(
@@ -480,6 +491,8 @@ void VulkanHost::setImage(
     uint32_t srcQueueFamily
 ) {
     auto host = static_cast<VulkanHost*>(handle);
+    // The last image may still be the source of a copy the GPU hasn't made.
+    host->finishFrame();
     host->frame = Frame {};
     // A null image withdraws the last one: the core is about to free it.
     if (image == nullptr || image->create_info.image == VK_NULL_HANDLE) return;
@@ -490,8 +503,8 @@ void VulkanHost::setImage(
     if (semaphores != nullptr) host->frame.waits.assign(semaphores, semaphores + semaphoreCount);
 }
 
-// One buffer, copied and waited for inside the video callback: there is never a frame still in flight, so the
-// core has a single set of per-frame resources to cycle through and nothing to wait for.
+// One buffer, and its copy is waited for before the next one is queued: there is never more than a frame in
+// flight, so the core has a single set of per-frame resources to cycle through and nothing to wait for.
 uint32_t VulkanHost::getSyncIndex(void* handle) {
     return 0;
 }

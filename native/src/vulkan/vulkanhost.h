@@ -37,6 +37,10 @@ namespace libretrodroid {
  * The core hands over each frame as a Vulkan image (set_image); present() copies it into an AHardwareBuffer,
  * which the GL side samples as an ordinary texture (VulkanRenderer). One GPU copy per frame, no readback.
  *
+ * The copy is queued behind everything the core drew for that frame, and nobody waits for it in the video
+ * callback: a core whose GPU thread is the one in retro_run (Dolphin) goes on with the next frame's drawing
+ * meanwhile. GL waits for it when it is about to use the buffer (finishFrame), by when the GPU is usually done.
+ *
  * The device is the core's when it negotiates one (create_device) and this host's otherwise; either way it is
  * created with the hardware-buffer extensions the copy needs, and outlives the GL surface.
  *
@@ -65,10 +69,13 @@ public:
     const struct retro_hw_render_interface_vulkan* getInterface() const { return hasDevice() ? &renderInterface : nullptr; }
 
     /**
-     * Copies the image the core last set, [width] x [height], into the shared buffer and waits for the GPU to
-     * finish, so GL may sample it right after. False when the core set none or the copy failed.
+     * Queues the copy of the image the core last set, [width] x [height], into the shared buffer. False when the
+     * core set none or the copy failed. The buffer holds the frame once finishFrame() returns.
      */
     bool present(unsigned width, unsigned height);
+
+    /** Waits for the GPU to finish the copy present() queued; returns at once when there is none. */
+    void finishFrame();
 
     /** The buffer present() fills, for GL to wrap; null before the first frame. */
     AHardwareBuffer* getBuffer() const { return target.buffer; }
@@ -132,6 +139,8 @@ private:
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
+    // A copy was submitted and its fence not waited for yet.
+    bool copyPending = false;
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID getHardwareBufferProperties = nullptr;
 
     struct retro_hw_render_interface_vulkan renderInterface {};

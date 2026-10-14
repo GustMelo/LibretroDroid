@@ -112,11 +112,14 @@ bool VulkanRenderer::wrapBuffer() {
     return true;
 }
 
+// Whoever asks is about to sample or read the buffer: the frame must have reached it.
 uintptr_t VulkanRenderer::getTexture() {
+    VulkanHost::getInstance().finishFrame();
     return texture;
 }
 
 uintptr_t VulkanRenderer::getFramebuffer() {
+    VulkanHost::getInstance().finishFrame();
     return framebuffer;
 }
 

@@ -252,7 +252,7 @@ void Video::onNewFrame(const void *data, unsigned width, unsigned height, size_t
         }
         renderer->onNewFrame(data, width, height, pitch);
         if (data == reinterpret_cast<const void*>(-1)) {
-            observationGpu.capture(renderer->getFramebuffer(), width, height, observationAspect,
+            observationGpu.capture([this] { return renderer->getFramebuffer(); }, width, height, observationAspect,
                 static_cast<unsigned>(std::lround(observationRotation / 1.57079632679f)), observationBottomUp);
         }
         isDirty = true;
